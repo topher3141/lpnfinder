@@ -37,11 +37,15 @@ body{
   flex-wrap:wrap;
 }
 
+.brand h1{ margin:0; font-size: 22px; letter-spacing: .2px; }
+.brand p{ margin:6px 0 0; color:var(--muted); font-size: 13px; line-height: 1.35; }
+
 .card{
   border:1px solid var(--border);
   background: var(--card);
   border-radius:18px;
   padding:16px;
+  box-shadow: 0 10px 26px rgba(0,0,0,0.22);
 }
 
 .row{
@@ -60,7 +64,10 @@ body{
   color: var(--text);
   font-size:20px;
   font-weight:850;
+  outline: none;
 }
+
+.input::placeholder{ color: rgba(255,255,255,0.45); }
 
 .button{
   padding:11px 12px;
@@ -71,6 +78,8 @@ body{
   font-weight:850;
   cursor:pointer;
 }
+
+.button:hover{ background: rgba(255,255,255,0.10); }
 
 .iconButton{
   width:52px;
@@ -86,6 +95,7 @@ body{
   font-size:12px;
   font-weight:800;
   color:var(--muted);
+  background: rgba(255,255,255,0.05);
 }
 
 .grid{
@@ -99,6 +109,7 @@ body{
   padding:12px;
   border-radius:16px;
   border:1px solid rgba(255,255,255,0.1);
+  background: rgba(0,0,0,0.14);
 }
 
 .kv .k{
@@ -106,11 +117,30 @@ body{
   color:var(--muted);
   margin-bottom:6px;
   text-transform:uppercase;
+  letter-spacing:.08em;
 }
 
 .kv .v{
   font-size:15px;
   font-weight:850;
+  word-break: break-word;
+}
+
+.heroRetail{
+  display:flex;
+  align-items:flex-end;
+  justify-content:space-between;
+  gap:12px;
+  margin-top: 10px;
+  flex-wrap:wrap;
+}
+
+.priceLabel{
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.18px;
+  text-transform: uppercase;
 }
 
 .price{
@@ -130,3 +160,15 @@ hr.sep{
   margin:14px 0;
 }
 
+/* ✅ Mobile background cleanup */
+@media (max-width: 560px){
+  body{
+    background: var(--bg);
+  }
+  .container{
+    padding: 14px;
+  }
+  .card{
+    box-shadow: none;
+  }
+}
