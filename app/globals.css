@@ -162,13 +162,19 @@ hr.sep{
 
 /* ✅ Mobile background cleanup */
 @media (max-width: 560px){
-  body{
-    background: var(--bg);
-  }
-  .container{
-    padding: 14px;
-  }
-  .card{
-    box-shadow: none;
-  }
+  body{ background: var(--bg); }
+  .container{ padding: 14px; }
+  .card{ box-shadow: none; }
+}
+
+/* ✅ Helpers for mobile-first UI */
+.mobileOnly{ display:none; }
+.desktopOnly{ display:block; }
+@media (max-width: 560px){
+  .mobileOnly{ display:block; }
+  .desktopOnly{ display:none; }
+
+  /* Make retail + item name immediately visible */
+  .price{ font-size: 44px; }
+  .brand h1{ font-size: 20px; }
 }
