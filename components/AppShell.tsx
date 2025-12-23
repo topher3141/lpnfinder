@@ -154,9 +154,7 @@ export default function AppShell() {
         <div className="brand">
           <h1>LPN Finder</h1>
           <p>
-            Manifests are stored <strong>internally in GitHub</strong> under{" "}
-            <code>/manifests</code>. Vercel indexes them automatically on deploy.
-            Then just scan/type an LPN.
+            .
           </p>
         </div>
 
