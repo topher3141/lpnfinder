@@ -1,54 +1,107 @@
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 import * as XLSX from "xlsx";
 
-const root = process.cwd();
-const manifestsDir = path.join(root, "manifests");
-const outDir = path.join(root, "public/index");
+const ROOT = process.cwd();
+const manifestsDir = path.join(ROOT, "manifests");
+const outDir = path.join(ROOT, "public", "index");
 const shardsDir = path.join(outDir, "shards");
 
 fs.mkdirSync(shardsDir, { recursive: true });
 
-function normalize(v){ return String(v||"").trim().toUpperCase(); }
-function shard(lpn){ return normalize(lpn).slice(0,2)||"ZZ"; }
-
-let index = {};
-let manifests = [];
-
-for (const file of fs.readdirSync(manifestsDir)) {
-  if (!file.endsWith(".xlsx")) continue;
-  manifests.push(file);
-  const wb = XLSX.read(fs.readFileSync(path.join(manifestsDir,file)));
-  wb.SheetNames.forEach(sheet=>{
-    const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheet], {header:1, defval:""});
-    const headerRow = rows.findIndex(r=>r.some(c=>String(c).toLowerCase()==="lpn"));
-    if (headerRow<0) return;
-    const headers = rows[headerRow];
-    rows.slice(headerRow+1).forEach((row,i)=>{
-      const rec = {};
-      headers.forEach((h,idx)=>rec[h]=row[idx]);
-      const lpn = normalize(rec.LPN);
-      if (!lpn) return;
-      index[lpn]={...rec,sheet,rowNumber:headerRow+2+i,__sourceFile:file};
-    });
-  });
+function normalizeLpn(v){
+  return String(v ?? "").trim().replace(/\s+/g, "").toUpperCase();
+}
+function shardFor(lpn){
+  const s = normalizeLpn(lpn);
+  return (s.slice(0,2) || "ZZ").padEnd(2,"Z");
+}
+function isMostlyEmpty(row){
+  return (row || []).filter(v => String(v ?? "").trim() !== "").length === 0;
+}
+function findHeaderRow(rows){
+  for (let r=0; r<rows.length; r++){
+    const row = rows[r] || [];
+    for (let c=0; c<row.length; c++){
+      if (String(row[c] ?? "").trim().toLowerCase() === "lpn") return r;
+    }
+  }
+  return -1;
 }
 
-const shards = {};
-Object.entries(index).forEach(([lpn,rec])=>{
-  const s=shard(lpn);
-  shards[s]=shards[s]||{};
-  shards[s][lpn]=rec;
-});
+const manifests = fs.existsSync(manifestsDir)
+  ? fs.readdirSync(manifestsDir).filter(f => f.toLowerCase().endsWith(".xlsx"))
+  : [];
 
-Object.entries(shards).forEach(([s,data])=>{
-  fs.writeFileSync(path.join(shardsDir,`${s}.json`), JSON.stringify({index:data}));
-});
+if (manifests.length === 0){
+  console.warn("No manifests found in /manifests. Build will still succeed.");
+}
 
-fs.writeFileSync(path.join(outDir,"meta.json"), JSON.stringify({
+const indexByShard = new Map(); // shard -> { lpn: record }
+let total = 0;
+
+for (const file of manifests){
+  const full = path.join(manifestsDir, file);
+  const buf = fs.readFileSync(full);
+  const wb = XLSX.read(buf, { type: "buffer" });
+
+  for (const sheet of wb.SheetNames){
+    const ws = wb.Sheets[sheet];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+
+    const headerRow = findHeaderRow(rows);
+    if (headerRow < 0) continue;
+
+    const headers = (rows[headerRow] || []).map(h => String(h ?? "").trim());
+
+    for (let r = headerRow + 1; r < rows.length; r++){
+      const row = rows[r] || [];
+      if (isMostlyEmpty(row)) continue;
+
+      const rec = {};
+      for (let c=0; c<headers.length; c++){
+        const key = headers[c];
+        if (!key) continue;
+        rec[key] = row[c];
+      }
+
+      const lpn = normalizeLpn(rec.LPN);
+      if (!lpn) continue;
+
+      const shard = shardFor(lpn);
+      if (!indexByShard.has(shard)) indexByShard.set(shard, {});
+      // last-one-wins (you said LPNs are unique globally)
+      indexByShard.get(shard)[lpn] = {
+        ...rec,
+        LPN: lpn,
+        sheet,
+        rowNumber: r + 1,
+        __sourceFile: file
+      };
+      total += 1;
+    }
+  }
+}
+
+// write shards
+const shardNames = Array.from(indexByShard.keys()).sort();
+for (const s of shardNames){
+  const payload = { shard: s, count: Object.keys(indexByShard.get(s)).length, index: indexByShard.get(s) };
+  fs.writeFileSync(path.join(shardsDir, `${s}.json`), JSON.stringify(payload));
+}
+
+// meta
+const uniqueLpns = shardNames.reduce((acc, s) => acc + Object.keys(indexByShard.get(s)).length, 0);
+const meta = {
+  updatedAt: new Date().toISOString(),
   manifests,
-  totalLpn:Object.keys(index).length,
-  shards:Object.keys(shards)
-}));
+  manifestCount: manifests.length,
+  shards: shardNames.length,
+  shardsList: shardNames,
+  uniqueLpns,
+};
 
-console.log("Indexed", Object.keys(index).length, "LPNs");
+fs.mkdirSync(outDir, { recursive: true });
+fs.writeFileSync(path.join(outDir, "meta.json"), JSON.stringify(meta));
+
+console.log(`Indexed ${uniqueLpns} unique LPNs across ${manifests.length} manifest(s) into ${shardNames.length} shard(s).`);

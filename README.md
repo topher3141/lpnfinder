@@ -1,25 +1,19 @@
-# /lpnfinder (Blob version)
+# /lpnfinder (GitHub manifests, deploy-time indexing)
 
-This app lets you:
-- Upload one or more Excel manifests once
-- Data is saved going forward using **Vercel Blob**
-- Look up items by scanning/typing an **LPN** (assumed unique)
+### Why you saw '@vercel/blob' errors
+That happens when old Blob-based files (like `app/api/upload/route.ts` or `app/api/_blob.ts`) are still in the repo.
+This build does **not** use Blob or KV.
 
-## Storage layout in Blob
-- Raw uploads (optional): `manifests/<timestamp>-<filename>.xlsx` (private)
-- Sharded indexes: `index/shards/AA.json` (public)
-- Meta: `index/meta.json` (public)
+### How it works
+- Put one or more `.xlsx` files in `/manifests`
+- On build (Vercel deploy), `scripts/build-index.mjs` parses all manifests and writes:
+  - `public/index/meta.json`
+  - `public/index/shards/<2-chars>.json` (sharded by first 2 chars of LPN)
 
-Sharding is by the first 2 characters of the normalized LPN, so lookups only download one small shard.
+### Add/update manifests
+Commit new files to `/manifests` and redeploy.
 
-## Deploy on Vercel
-1) Push repo to GitHub
-2) Import to Vercel
-3) Add **Vercel Blob** storage to the project (it sets `BLOB_READ_WRITE_TOKEN`)
-4) Deploy
-
-## Local dev
-Create `.env` from `.env.example` with your `BLOB_READ_WRITE_TOKEN`, then:
+### Local dev
 ```bash
 npm install
 npm run dev
