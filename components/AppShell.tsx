@@ -37,7 +37,7 @@ export default function AppShell() {
   const [record, setRecord] = useState<any | null>(null);
   const [found, setFound] = useState<boolean | null>(null);
 
-  // NEW: scanner modal
+  // Scanner modal
   const [scannerOpen, setScannerOpen] = useState(false);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -157,7 +157,7 @@ export default function AppShell() {
             </div>
           </div>
 
-          {/* NEW: camera scan button */}
+          {/* Camera scan button */}
           <button
             className="button iconButton"
             onClick={() => setScannerOpen(true)}
@@ -204,10 +204,15 @@ export default function AppShell() {
           <div style={{ marginTop: 14 }} className="card">
             <div
               className="row"
-              style={{ justifyContent: "space-between", alignItems: "flex-start" }}
+              style={{
+                justifyContent: "space-between",
+                alignItems: "flex-start",
+              }}
             >
               <div style={{ fontSize: 18, fontWeight: 950 }}>
-                {String(record["Item Description"] || record["Description"] || "Item")}
+                {String(
+                  record["Item Description"] || record["Description"] || "Item"
+                )}
               </div>
               <span className="badge">
                 Source:{" "}
@@ -242,7 +247,10 @@ export default function AppShell() {
               <KV label="Subcategory" value={record.Subcategory} />
               <KV label="Pallet ID" value={record["Pallet ID"]} />
               <KV label="Lot ID" value={record["Lot ID"]} />
-              <KV label="Sheet / Row" value={`${record.sheet ?? "—"} / ${record.rowNumber ?? "—"}`} />
+              <KV
+                label="Sheet / Row"
+                value={`${record.sheet ?? "—"} / ${record.rowNumber ?? "—"}`}
+              />
             </div>
           </div>
         )}
@@ -253,9 +261,8 @@ export default function AppShell() {
         and Vercel will rebuild the index on deploy.
       </div>
 
-      {/* NEW: scanner modal */}
       {scannerOpen && (
-        <ScannerModal
+        <ZxingScannerModal
           onClose={() => setScannerOpen(false)}
           onScanned={(value) => {
             const v = normalizeLpn(value);
@@ -280,43 +287,74 @@ function KV({ label, value }: { label: string; value: any }) {
 }
 
 /**
- * Camera scanner modal using html5-qrcode.
- * Works on HTTPS (Vercel). Mobile Safari/Chrome will prompt for camera permission.
+ * ZXing camera scanner modal (better 1D performance than html5-qrcode for many setups).
+ * Uses @zxing/browser decodeFromVideoDevice. :contentReference[oaicite:2]{index=2}
  */
-function ScannerModal({
+function ZxingScannerModal({
   onClose,
   onScanned,
 }: {
   onClose: () => void;
   onScanned: (value: string) => void;
 }) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const controlsRef = useRef<any>(null);
+
   const [err, setErr] = useState<string | null>(null);
+  const [torchAvailable, setTorchAvailable] = useState(false);
+  const [torchOn, setTorchOn] = useState(false);
 
   useEffect(() => {
-    let scanner: any = null;
     let cancelled = false;
+    let codeReader: any = null;
 
     (async () => {
       try {
-        const mod = await import("html5-qrcode");
-        const { Html5Qrcode } = mod as any;
+        const mod = await import("@zxing/browser");
+        const { BrowserMultiFormatReader } = mod as any;
 
-        scanner = new Html5Qrcode("qr-reader");
+        codeReader = new BrowserMultiFormatReader(undefined, {
+          // try a little harder; helps some 1D scans
+          delayBetweenScanAttempts: 25,
+        });
 
-        await scanner.start(
-          { facingMode: "environment" },
-          {
-            fps: 10,
-            // a little wider box helps with 1D barcodes
-            qrbox: { width: 280, height: 200 },
-            // NOTE: html5-qrcode supports many formats; we leave defaults.
-          },
-          (decodedText: string) => {
+        const video = videoRef.current;
+        if (!video) return;
+
+        // Try to pick the back camera if we can
+        let preferredDeviceId: string | undefined = undefined;
+        try {
+          const devices = await BrowserMultiFormatReader.listVideoInputDevices();
+          // pick a device with "back" in the label if labels are available
+          const back = devices.find((d: any) =>
+            String(d.label || "").toLowerCase().includes("back")
+          );
+          preferredDeviceId = back?.deviceId || devices[devices.length - 1]?.deviceId;
+        } catch {
+          // If we can't enumerate (permissions not granted yet), we'll let it pick default
+        }
+
+        // Start continuous decode from camera
+        const controls = await codeReader.decodeFromVideoDevice(
+          preferredDeviceId,
+          video,
+          (result: any, error: any, controlsFromCb: any) => {
             if (cancelled) return;
-            onScanned(decodedText);
-          },
-          () => {}
+            if (result) {
+              const text =
+                typeof result.getText === "function" ? result.getText() : String(result?.text ?? "");
+              if (text) {
+                onScanned(text);
+              }
+            }
+            // ignore "not found" errors; they happen constantly while scanning
+          }
         );
+
+        controlsRef.current = controls;
+
+        // Torch support if available (not on all browsers/devices)
+        setTorchAvailable(Boolean(controls?.switchTorch));
       } catch (e: any) {
         setErr(e?.message || String(e));
       }
@@ -326,14 +364,27 @@ function ScannerModal({
       cancelled = true;
       (async () => {
         try {
-          if (scanner) {
-            await scanner.stop();
-            await scanner.clear();
+          if (controlsRef.current?.stop) {
+            controlsRef.current.stop();
           }
+        } catch {}
+        try {
+          if (codeReader?.reset) codeReader.reset();
         } catch {}
       })();
     };
   }, [onScanned]);
+
+  async function toggleTorch() {
+    try {
+      const controls = controlsRef.current;
+      if (!controls?.switchTorch) return;
+      await controls.switchTorch(!torchOn);
+      setTorchOn((v) => !v);
+    } catch (e: any) {
+      setErr(e?.message || String(e));
+    }
+  }
 
   return (
     <div
@@ -352,34 +403,53 @@ function ScannerModal({
     >
       <div
         className="card"
-        style={{ width: "min(560px, 100%)" }}
+        style={{ width: "min(720px, 100%)" }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="row" style={{ justifyContent: "space-between" }}>
           <div style={{ fontWeight: 950, fontSize: 16 }}>Scan barcode</div>
-          <button className="button" onClick={onClose} style={{ width: "auto" }}>
-            Close
-          </button>
+          <div className="row" style={{ justifyContent: "flex-end" }}>
+            {torchAvailable && (
+              <button className="button" onClick={toggleTorch} style={{ width: "auto" }}>
+                {torchOn ? "Torch: On" : "Torch: Off"}
+              </button>
+            )}
+            <button className="button" onClick={onClose} style={{ width: "auto" }}>
+              Close
+            </button>
+          </div>
         </div>
 
         <hr className="sep" />
 
         {err ? (
           <div className="small" style={{ color: "var(--bad)" }}>
-            Camera error: {err}
+            Camera/scanner error: {err}
             <div className="small" style={{ marginTop: 6 }}>
-              Tip: On iPhone, allow camera permissions for the site (Safari →
-              aA → Website Settings → Camera).
+              Tip: Allow camera permission for the site. Try brighter light + hold the barcode steady.
             </div>
           </div>
         ) : (
           <>
+            {/* Wider preview helps 1D scanning */}
             <div
-              id="qr-reader"
-              style={{ width: "100%", borderRadius: 16, overflow: "hidden" }}
-            />
+              style={{
+                borderRadius: 16,
+                overflow: "hidden",
+                border: "1px solid rgba(255,255,255,0.14)",
+                background: "rgba(0,0,0,0.25)",
+              }}
+            >
+              <video
+                ref={videoRef}
+                style={{ width: "100%", display: "block" }}
+                muted
+                playsInline
+              />
+            </div>
+
             <div className="small" style={{ marginTop: 10 }}>
-              Point your camera at the barcode. It will auto-fill and search.
+              Aim at the barcode. For best results: bright light, fill the frame, and keep it steady for ~1 second.
             </div>
           </>
         )}
