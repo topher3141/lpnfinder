@@ -30,29 +30,37 @@ function formatMoney(value: any) {
   return n.toLocaleString(undefined, { style: "currency", currency: "USD" });
 }
 
+// ✅ pattern: "LPN" + 10 characters = total 13
+function looksLikeFullLpn(v: string) {
+  const s = normalizeLpn(v);
+  return /^LPN[A-Z0-9]{10}$/.test(s);
+}
+
 export default function AppShell() {
   const [meta, setMeta] = useState<Meta | null>(null);
 
-  // scanning/search
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("Ready. Scan or type an LPN.");
   const [record, setRecord] = useState<any | null>(null);
   const [found, setFound] = useState<boolean | null>(null);
 
-  // ✅ Scan mode options
   const [scanMode, setScanMode] = useState(true);
   const [autoClear, setAutoClear] = useState(true);
 
-  // camera modal
+  // ✅ NEW: auto-search when full code detected
+  const [autoSearch, setAutoSearch] = useState(true);
+
   const [scannerOpen, setScannerOpen] = useState(false);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  // Keep last scanned LPN visible even if we auto-clear the input
+  // Keep last scanned even when we clear input
   const [lastLpn, setLastLpn] = useState<string>("");
 
+  // Prevent repeated firing while the same value sits in the box
+  const lastTriggeredRef = useRef<string>("");
+
   useEffect(() => {
-    // initial focus
     inputRef.current?.focus();
 
     (async () => {
@@ -95,6 +103,7 @@ export default function AppShell() {
 
       if (!rec) {
         setFound(false);
+        setRecord(null);
         setStatus(`No match for ${lpn}`);
         return;
       }
@@ -102,19 +111,35 @@ export default function AppShell() {
       setFound(true);
       setRecord(rec);
       setStatus(`Match found for ${lpn}`);
-
-      // ✅ Auto-clear after a successful scan/search for rapid scanning
-      if (autoClear) {
-        setQuery("");
-        refocusSoon();
-      }
     } catch (e: any) {
       setFound(false);
       setStatus(`Lookup failed: ${e?.message || e}`);
     } finally {
+      // ✅ Auto-clear after search (match OR no-match) for fast scanning
+      if (scanMode && autoClear) {
+        setQuery("");
+        // allow next trigger
+        lastTriggeredRef.current = "";
+      }
       if (scanMode) refocusSoon();
     }
   }
+
+  // ✅ Auto-search effect: watches query and triggers once when complete LPN is present
+  useEffect(() => {
+    if (!scanMode || !autoSearch) return;
+
+    const s = normalizeLpn(query);
+    if (!looksLikeFullLpn(s)) return;
+
+    // prevent retrigger if unchanged
+    if (lastTriggeredRef.current === s) return;
+
+    lastTriggeredRef.current = s;
+    // fire lookup
+    lookup(s);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, scanMode, autoSearch]);
 
   const retailValue = useMemo(() => {
     if (!record) return "—";
@@ -160,10 +185,20 @@ export default function AppShell() {
       </div>
 
       <div className="card">
-        {/* ✅ Scan mode controls */}
-        <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
+        {/* Scan controls */}
+        <div
+          className="row"
+          style={{ justifyContent: "space-between", marginBottom: 10 }}
+        >
           <span className="badge">
-            <label style={{ display: "inline-flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
+            <label
+              style={{
+                display: "inline-flex",
+                gap: 8,
+                alignItems: "center",
+                cursor: "pointer",
+              }}
+            >
               <input
                 type="checkbox"
                 checked={scanMode}
@@ -177,11 +212,38 @@ export default function AppShell() {
           </span>
 
           <span className="badge">
-            <label style={{ display: "inline-flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
+            <label
+              style={{
+                display: "inline-flex",
+                gap: 8,
+                alignItems: "center",
+                cursor: "pointer",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={autoSearch}
+                onChange={(e) => setAutoSearch(e.target.checked)}
+                disabled={!scanMode}
+              />
+              Auto-search
+            </label>
+          </span>
+
+          <span className="badge">
+            <label
+              style={{
+                display: "inline-flex",
+                gap: 8,
+                alignItems: "center",
+                cursor: "pointer",
+              }}
+            >
               <input
                 type="checkbox"
                 checked={autoClear}
                 onChange={(e) => setAutoClear(e.target.checked)}
+                disabled={!scanMode}
               />
               Auto-clear
             </label>
@@ -199,15 +261,13 @@ export default function AppShell() {
               autoCapitalize="characters"
               autoCorrect="off"
               spellCheck={false}
-              // ✅ Hint to mobile: don’t show keyboard if possible
               inputMode={scanMode ? "none" : "text"}
-              // ✅ keep focus for scan guns; select text if user taps in
               onFocus={(e) => e.currentTarget.select()}
-              // ✅ in scan mode, if focus is lost, pull it back
               onBlur={() => {
                 if (scanMode) refocusSoon();
               }}
               onKeyDown={(e) => {
+                // If auto-search is on, Enter isn't required—but keep it as fallback
                 if (e.key === "Enter") {
                   lookup();
                   (e.currentTarget as HTMLInputElement).select();
@@ -216,7 +276,7 @@ export default function AppShell() {
             />
             <div className="small" style={{ marginTop: 8 }}>
               {scanMode
-                ? "Scan Mode: input stays focused; scans search instantly; field clears after a match."
+                ? "Scan Mode: auto-search triggers when code matches LPN + 10 chars. Clears for next scan."
                 : "Tip: Most barcode scanners “type” the value and send Enter."}
             </div>
           </div>
@@ -241,6 +301,7 @@ export default function AppShell() {
               setQuery("");
               setFound(null);
               setStatus("Ready. Scan or type an LPN.");
+              lastTriggeredRef.current = "";
               if (scanMode) refocusSoon();
             }}
           >
@@ -256,10 +317,6 @@ export default function AppShell() {
             <div style={{ fontWeight: 950, fontSize: 16, color: "var(--bad)" }}>
               No match {lastLpn ? `(${lastLpn})` : ""}
             </div>
-            <div className="small" style={{ marginTop: 6 }}>
-              If you just added a new file, make sure it’s in{" "}
-              <code>/manifests</code> and Vercel redeployed.
-            </div>
           </div>
         )}
 
@@ -270,7 +327,9 @@ export default function AppShell() {
               style={{ justifyContent: "space-between", alignItems: "flex-start" }}
             >
               <div style={{ fontSize: 18, fontWeight: 950 }}>
-                {String(record["Item Description"] || record["Description"] || "Item")}
+                {String(
+                  record["Item Description"] || record["Description"] || "Item"
+                )}
               </div>
               <span className="badge">
                 Source:{" "}
@@ -286,7 +345,7 @@ export default function AppShell() {
                 <div className="price">{retailValue}</div>
               </div>
               <div style={{ textAlign: "right" }}>
-                <div className="priceLabel">LPN</div>
+                <div className="priceLabel">Last LPN</div>
                 <div style={{ fontSize: 18, fontWeight: 950 }}>
                   {String(lastLpn || record.LPN || "—")}
                 </div>
@@ -295,7 +354,10 @@ export default function AppShell() {
 
             <div className="grid">
               <KV label="Qty" value={record.Qty} />
-              <KV label="Ext. Retail" value={formatMoney(record["Ext. Retail"])} />
+              <KV
+                label="Ext. Retail"
+                value={formatMoney(record["Ext. Retail"])}
+              />
               <KV label="Brand" value={record.Brand} />
               <KV label="Condition" value={record.Condition} />
               <KV label="ASIN" value={record.ASIN} />
@@ -327,6 +389,7 @@ export default function AppShell() {
             setLastLpn(v);
             setQuery(v);
             setScannerOpen(false);
+            // auto-search will trigger, but calling lookup directly feels snappier:
             lookup(v);
           }}
         />
@@ -345,7 +408,7 @@ function KV({ label, value }: { label: string; value: any }) {
   );
 }
 
-/** ZXing camera scanner modal (unchanged from your ZXing version) */
+/** ZXing camera scanner modal */
 function ZxingScannerModal({
   onClose,
   onScanned,
