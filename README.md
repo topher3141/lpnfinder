@@ -1,30 +1,26 @@
-# /lpnfinder
+# /lpnfinder (Blob version)
 
-A simple Vercel + GitHub web app:
+This app lets you:
+- Upload one or more Excel manifests once
+- Data is saved going forward using **Vercel Blob**
+- Look up items by scanning/typing an **LPN** (assumed unique)
 
-- Upload one or more Excel manifests (.xlsx)
-- Server parses all sheets and stores each row keyed by **LPN** in **Vercel KV**
-- Search by scanning/typing an LPN (LPNs are treated as unique)
+## Storage layout in Blob
+- Raw uploads (optional): `manifests/<timestamp>-<filename>.xlsx` (private)
+- Sharded indexes: `index/shards/AA.json` (public)
+- Meta: `index/meta.json` (public)
+
+Sharding is by the first 2 characters of the normalized LPN, so lookups only download one small shard.
+
+## Deploy on Vercel
+1) Push repo to GitHub
+2) Import to Vercel
+3) Add **Vercel Blob** storage to the project (it sets `BLOB_READ_WRITE_TOKEN`)
+4) Deploy
 
 ## Local dev
-1) Create a Vercel KV database and connect it to this project (recommended).
-2) Copy env vars into `.env` from `.env.example`
-3) Run:
-
+Create `.env` from `.env.example` with your `BLOB_READ_WRITE_TOKEN`, then:
 ```bash
 npm install
 npm run dev
 ```
-
-## Deploy on Vercel
-1) Push repo to GitHub
-2) Import into Vercel
-3) In Vercel: Storage → create/connect **KV**
-4) Deploy
-
-## Uploading manifests
-Go to the **Upload** tab and select multiple .xlsx files at once.
-
-## Notes
-- Keys are stored as: `lpn:YOUR_LPN`
-- Conflicts: if an LPN already exists, the newest upload overwrites it (but upload reports conflicts).
