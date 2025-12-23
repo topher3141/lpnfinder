@@ -21,12 +21,16 @@ function shardFor(lpn: string) {
   return head;
 }
 
+function toNumberMoney(value: any): number | null {
+  if (value == null) return null;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const n = Number(String(value).replace(/[$,]/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
 function formatMoney(value: any) {
-  const n =
-    typeof value === "number"
-      ? value
-      : Number(String(value ?? "").replace(/[$,]/g, ""));
-  if (!Number.isFinite(n)) return "—";
+  const n = toNumberMoney(value);
+  if (n == null) return "—";
   return n.toLocaleString(undefined, { style: "currency", currency: "USD" });
 }
 
@@ -133,10 +137,24 @@ export default function AppShell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, scanMode, autoSearch]);
 
-  const retailValue = useMemo(() => {
-    if (!record) return "—";
-    return formatMoney(record["Unit Retail"] ?? record["Retail"] ?? record["Ext. Retail"]);
+  const retailNumber = useMemo(() => {
+    if (!record) return null;
+    return toNumberMoney(record["Unit Retail"] ?? record["Retail"] ?? record["Ext. Retail"]);
   }, [record]);
+
+  const retailValue = useMemo(() => {
+    return retailNumber == null ? "—" : formatMoney(retailNumber);
+  }, [retailNumber]);
+
+  // ✅ Target sell: 50% off retail = retail * 0.5
+  const targetSellNumber = useMemo(() => {
+    if (retailNumber == null) return null;
+    return Math.round(retailNumber * 0.5 * 100) / 100;
+  }, [retailNumber]);
+
+  const targetSellValue = useMemo(() => {
+    return targetSellNumber == null ? "—" : formatMoney(targetSellNumber);
+  }, [targetSellNumber]);
 
   const itemTitle = useMemo(() => {
     if (!record) return "";
@@ -228,7 +246,7 @@ export default function AppShell() {
       </div>
 
       <div className="card">
-        {/* Desktop controls stay near the top */}
+        {/* Desktop controls near the top */}
         <Controls className="desktopOnly" />
         <div className="desktopOnly">
           <hr className="sep" />
@@ -293,15 +311,33 @@ export default function AppShell() {
         <hr className="sep" />
         <div className="small">{status}</div>
 
-        {/* Results: mobile-first ordering (retail + title at the top) */}
+        {/* Results */}
         {record && (
           <div style={{ marginTop: 12 }} className="card">
-            {/* Always show retail + item name immediately */}
+            {/* Retail + Target Sell */}
             <div className="heroRetail" style={{ marginTop: 0 }}>
               <div>
                 <div className="priceLabel">Retail</div>
                 <div className="price">{retailValue}</div>
-                <div className="small" style={{ marginTop: 6 }}>
+
+                {/* ✅ Target sell (highlighted but less dominant) */}
+                <div
+                  style={{
+                    marginTop: 10,
+                    display: "inline-block",
+                    padding: "10px 12px",
+                    borderRadius: 14,
+                    border: "1px solid rgba(52,211,153,0.35)",
+                    background: "rgba(52,211,153,0.10)",
+                  }}
+                >
+                  <div className="priceLabel">Target Sell (50% off)</div>
+                  <div style={{ fontSize: 24, fontWeight: 950, color: "var(--good)", lineHeight: 1.1 }}>
+                    {targetSellValue}
+                  </div>
+                </div>
+
+                <div className="small" style={{ marginTop: 8 }}>
                   Last LPN: <strong style={{ color: "var(--text)" }}>{lastLpn || record.LPN || "—"}</strong>
                 </div>
               </div>
@@ -313,7 +349,6 @@ export default function AppShell() {
 
             <div style={{ marginTop: 10, fontSize: 18, fontWeight: 950 }}>{itemTitle}</div>
 
-            {/* Mobile: keep details collapsed-ish by just showing fewer fields */}
             <div className="grid" style={{ marginTop: 12 }}>
               <KV label="Qty" value={record.Qty} />
               <KV label="Ext. Retail" value={formatMoney(record["Ext. Retail"])} />
