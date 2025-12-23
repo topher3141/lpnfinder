@@ -1,21 +1,30 @@
-# lpnfinder
+# /lpnfinder
 
-Simple web app to upload an Excel manifest and look up items by LPN (barcode scan or typing).
+A simple Vercel + GitHub web app:
 
-## Local run
+- Upload one or more Excel manifests (.xlsx)
+- Server parses all sheets and stores each row keyed by **LPN** in **Vercel KV**
+- Search by scanning/typing an LPN (LPNs are treated as unique)
+
+## Local dev
+1) Create a Vercel KV database and connect it to this project (recommended).
+2) Copy env vars into `.env` from `.env.example`
+3) Run:
+
 ```bash
 npm install
 npm run dev
 ```
 
-Open http://localhost:3000
+## Deploy on Vercel
+1) Push repo to GitHub
+2) Import into Vercel
+3) In Vercel: Storage → create/connect **KV**
+4) Deploy
 
-## Deploy (Vercel)
-1. Push this repo to GitHub
-2. Import into Vercel as a Next.js project
-3. Deploy
+## Uploading manifests
+Go to the **Upload** tab and select multiple .xlsx files at once.
 
 ## Notes
-- Parsing happens client-side in your browser.
-- The app searches all sheets and finds the header row containing a column named `LPN` (so it doesn't depend on hard-coded column letters).
-- A barcode scanner typically acts like a keyboard, so just keep focus in the LPN input box and scan.
+- Keys are stored as: `lpn:YOUR_LPN`
+- Conflicts: if an LPN already exists, the newest upload overwrites it (but upload reports conflicts).

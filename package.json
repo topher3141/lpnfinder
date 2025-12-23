@@ -1,6 +1,6 @@
 {
   "name": "lpnfinder",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -9,9 +9,10 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "next": "15.2.6",
-    "react": "19.0.1",
-    "react-dom": "19.0.1",
+    "@vercel/kv": "^1.0.1",
+    "next": "^15.2.7",
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
