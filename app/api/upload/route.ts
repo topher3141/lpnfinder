@@ -113,7 +113,8 @@ export async function POST(req: Request) {
     }
 
     // Also store the raw file itself in blob (optional convenience)
-    await put(`manifests/${Date.now()}-${name}`, buf, { access: "private", contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    // Raw manifest storage disabled (indexing only).
+    // If you want to store originals too, change this to access: "public" and a separate pathname.
   }
 
   // For each touched shard: load existing, merge, write back
