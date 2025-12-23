@@ -30,7 +30,7 @@ function formatMoney(value: any) {
   return n.toLocaleString(undefined, { style: "currency", currency: "USD" });
 }
 
-// ✅ pattern: "LPN" + 10 characters = total 13
+// LPN + 10 characters
 function looksLikeFullLpn(v: string) {
   const s = normalizeLpn(v);
   return /^LPN[A-Z0-9]{10}$/.test(s);
@@ -46,18 +46,13 @@ export default function AppShell() {
 
   const [scanMode, setScanMode] = useState(true);
   const [autoClear, setAutoClear] = useState(true);
-
-  // ✅ NEW: auto-search when full code detected
   const [autoSearch, setAutoSearch] = useState(true);
 
   const [scannerOpen, setScannerOpen] = useState(false);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  // Keep last scanned even when we clear input
   const [lastLpn, setLastLpn] = useState<string>("");
-
-  // Prevent repeated firing while the same value sits in the box
   const lastTriggeredRef = useRef<string>("");
 
   useEffect(() => {
@@ -87,13 +82,13 @@ export default function AppShell() {
     setFound(null);
 
     const shard = shardFor(lpn);
+
     try {
-      const res = await fetch(`/index/shards/${shard}.json`, {
-        cache: "no-store",
-      });
+      const res = await fetch(`/index/shards/${shard}.json`, { cache: "no-store" });
 
       if (!res.ok) {
         setFound(false);
+        setRecord(null);
         setStatus(`No index shard for ${shard}. (Did the deploy index run?)`);
         return;
       }
@@ -113,90 +108,47 @@ export default function AppShell() {
       setStatus(`Match found for ${lpn}`);
     } catch (e: any) {
       setFound(false);
+      setRecord(null);
       setStatus(`Lookup failed: ${e?.message || e}`);
     } finally {
-      // ✅ Auto-clear after search (match OR no-match) for fast scanning
+      // clear for next scan (match OR no-match) when in scan mode
       if (scanMode && autoClear) {
         setQuery("");
-        // allow next trigger
         lastTriggeredRef.current = "";
       }
       if (scanMode) refocusSoon();
     }
   }
 
-  // ✅ Auto-search effect: watches query and triggers once when complete LPN is present
+  // auto-search when a full LPN is present
   useEffect(() => {
     if (!scanMode || !autoSearch) return;
 
     const s = normalizeLpn(query);
     if (!looksLikeFullLpn(s)) return;
-
-    // prevent retrigger if unchanged
     if (lastTriggeredRef.current === s) return;
 
     lastTriggeredRef.current = s;
-    // fire lookup
     lookup(s);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, scanMode, autoSearch]);
 
   const retailValue = useMemo(() => {
     if (!record) return "—";
-    return formatMoney(
-      record["Unit Retail"] ?? record["Retail"] ?? record["Ext. Retail"]
-    );
+    return formatMoney(record["Unit Retail"] ?? record["Retail"] ?? record["Ext. Retail"]);
   }, [record]);
 
-  return (
-    <div className="container">
-      <div className="header">
-        <div className="brand">
-          <h1>LPN Finder</h1>
-          <p>
-            .
-          </p>
-        </div>
+  const itemTitle = useMemo(() => {
+    if (!record) return "";
+    return String(record["Item Description"] || record["Description"] || "Item");
+  }, [record]);
 
-        <div className="row" style={{ justifyContent: "flex-end" }}>
+  function Controls({ className }: { className?: string }) {
+    return (
+      <div className={className ?? ""}>
+        <div className="row" style={{ justifyContent: "space-between" }}>
           <span className="badge">
-            Manifests:{" "}
-            <strong style={{ color: "var(--text)" }}>
-              {meta?.manifestCount ?? "—"}
-            </strong>
-          </span>
-          <span className="badge">
-            Unique LPNs:{" "}
-            <strong style={{ color: "var(--text)" }}>
-              {meta?.uniqueLpns ?? "—"}
-            </strong>
-          </span>
-          <span className="badge">
-            Updated:{" "}
-            <strong style={{ color: "var(--text)" }}>
-              {meta?.updatedAt
-                ? new Date(meta.updatedAt).toLocaleString()
-                : "—"}
-            </strong>
-          </span>
-        </div>
-      </div>
-
-      <div className="card">
-        {/* Scan controls */}
-        <div
-          className="row"
-          style={{ justifyContent: "space-between", marginBottom: 10 }}
-        >
-          <span className="badge">
-            <label
-              style={{
-                display: "inline-flex",
-                gap: 8,
-                alignItems: "center",
-                cursor: "pointer",
-              }}
-            >
+            <label style={{ display: "inline-flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
               <input
                 type="checkbox"
                 checked={scanMode}
@@ -210,14 +162,7 @@ export default function AppShell() {
           </span>
 
           <span className="badge">
-            <label
-              style={{
-                display: "inline-flex",
-                gap: 8,
-                alignItems: "center",
-                cursor: "pointer",
-              }}
-            >
+            <label style={{ display: "inline-flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
               <input
                 type="checkbox"
                 checked={autoSearch}
@@ -229,14 +174,7 @@ export default function AppShell() {
           </span>
 
           <span className="badge">
-            <label
-              style={{
-                display: "inline-flex",
-                gap: 8,
-                alignItems: "center",
-                cursor: "pointer",
-              }}
-            >
+            <label style={{ display: "inline-flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
               <input
                 type="checkbox"
                 checked={autoClear}
@@ -247,7 +185,56 @@ export default function AppShell() {
             </label>
           </span>
         </div>
+      </div>
+    );
+  }
 
+  return (
+    <div className="container">
+      {/* Desktop header */}
+      <div className="header desktopOnly">
+        <div className="brand">
+          <h1>LPN Finder</h1>
+          <p>
+            Manifests are stored <strong>internally in GitHub</strong> under <code>/manifests</code>. Vercel indexes them
+            automatically on deploy. Then just scan/type an LPN.
+          </p>
+        </div>
+
+        <div className="row" style={{ justifyContent: "flex-end" }}>
+          <span className="badge">
+            Manifests: <strong style={{ color: "var(--text)" }}>{meta?.manifestCount ?? "—"}</strong>
+          </span>
+          <span className="badge">
+            Unique LPNs: <strong style={{ color: "var(--text)" }}>{meta?.uniqueLpns ?? "—"}</strong>
+          </span>
+          <span className="badge">
+            Updated:{" "}
+            <strong style={{ color: "var(--text)" }}>
+              {meta?.updatedAt ? new Date(meta.updatedAt).toLocaleString() : "—"}
+            </strong>
+          </span>
+        </div>
+      </div>
+
+      {/* Mobile header (compact) */}
+      <div className="header mobileOnly" style={{ marginBottom: 10 }}>
+        <div className="brand">
+          <h1 style={{ marginBottom: 0 }}>LPN Finder</h1>
+          <div className="small" style={{ marginTop: 6 }}>
+            {meta?.manifestCount ? `${meta.manifestCount} manifests • ${meta.uniqueLpns ?? "—"} LPNs` : "Ready to scan"}
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        {/* Desktop controls stay near the top */}
+        <Controls className="desktopOnly" />
+        <div className="desktopOnly">
+          <hr className="sep" />
+        </div>
+
+        {/* Input row */}
         <div className="row" style={{ alignItems: "flex-start" }}>
           <div style={{ flex: 1, minWidth: 260 }}>
             <input
@@ -255,7 +242,7 @@ export default function AppShell() {
               className="input"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Scan / type LPN…"
+              placeholder="Scan LPN…"
               autoCapitalize="characters"
               autoCorrect="off"
               spellCheck={false}
@@ -265,7 +252,6 @@ export default function AppShell() {
                 if (scanMode) refocusSoon();
               }}
               onKeyDown={(e) => {
-                // If auto-search is on, Enter isn't required—but keep it as fallback
                 if (e.key === "Enter") {
                   lookup();
                   (e.currentTarget as HTMLInputElement).select();
@@ -273,13 +259,10 @@ export default function AppShell() {
               }}
             />
             <div className="small" style={{ marginTop: 8 }}>
-              {scanMode
-                ? "Scan Mode: auto-search triggers when code matches LPN + 10 chars. Clears for next scan."
-                : "Tip: Most barcode scanners “type” the value and send Enter."}
+              {scanMode ? "Auto-search triggers at LPN + 10 chars. Clears for next scan." : "Type an LPN and hit Search."}
             </div>
           </div>
 
-          {/* Camera scan button */}
           <button
             className="button iconButton"
             onClick={() => setScannerOpen(true)}
@@ -310,73 +293,67 @@ export default function AppShell() {
         <hr className="sep" />
         <div className="small">{status}</div>
 
+        {/* Results: mobile-first ordering (retail + title at the top) */}
+        {record && (
+          <div style={{ marginTop: 12 }} className="card">
+            {/* Always show retail + item name immediately */}
+            <div className="heroRetail" style={{ marginTop: 0 }}>
+              <div>
+                <div className="priceLabel">Retail</div>
+                <div className="price">{retailValue}</div>
+                <div className="small" style={{ marginTop: 6 }}>
+                  Last LPN: <strong style={{ color: "var(--text)" }}>{lastLpn || record.LPN || "—"}</strong>
+                </div>
+              </div>
+
+              <span className="badge desktopOnly">
+                Source: <strong style={{ color: "var(--text)" }}>{String(record.__sourceFile || "—")}</strong>
+              </span>
+            </div>
+
+            <div style={{ marginTop: 10, fontSize: 18, fontWeight: 950 }}>{itemTitle}</div>
+
+            {/* Mobile: keep details collapsed-ish by just showing fewer fields */}
+            <div className="grid" style={{ marginTop: 12 }}>
+              <KV label="Qty" value={record.Qty} />
+              <KV label="Ext. Retail" value={formatMoney(record["Ext. Retail"])} />
+              <KV label="Brand" value={record.Brand} />
+              <KV label="Condition" value={record.Condition} />
+              <KV label="Pallet ID" value={record["Pallet ID"]} />
+              <KV label="Lot ID" value={record["Lot ID"]} />
+
+              {/* Extra fields only on desktop */}
+              <div className="desktopOnly">
+                <div className="grid">
+                  <KV label="ASIN" value={record.ASIN} />
+                  <KV label="UPC" value={record.UPC} />
+                  <KV label="EAN" value={record.EAN} />
+                  <KV label="Category" value={record.Category} />
+                  <KV label="Subcategory" value={record.Subcategory} />
+                  <KV label="Sheet / Row" value={`${record.sheet ?? "—"} / ${record.rowNumber ?? "—"}`} />
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {found === false && (
-          <div style={{ marginTop: 14 }} className="card">
+          <div style={{ marginTop: 12 }} className="card">
             <div style={{ fontWeight: 950, fontSize: 16, color: "var(--bad)" }}>
               No match {lastLpn ? `(${lastLpn})` : ""}
             </div>
           </div>
         )}
 
-        {record && (
-          <div style={{ marginTop: 14 }} className="card">
-            <div
-              className="row"
-              style={{ justifyContent: "space-between", alignItems: "flex-start" }}
-            >
-              <div style={{ fontSize: 18, fontWeight: 950 }}>
-                {String(
-                  record["Item Description"] || record["Description"] || "Item"
-                )}
-              </div>
-              <span className="badge">
-                Source:{" "}
-                <strong style={{ color: "var(--text)" }}>
-                  {String(record.__sourceFile || "—")}
-                </strong>
-              </span>
-            </div>
-
-            <div className="heroRetail">
-              <div>
-                <div className="priceLabel">Retail</div>
-                <div className="price">{retailValue}</div>
-              </div>
-              <div style={{ textAlign: "right" }}>
-                <div className="priceLabel">Last LPN</div>
-                <div style={{ fontSize: 18, fontWeight: 950 }}>
-                  {String(lastLpn || record.LPN || "—")}
-                </div>
-              </div>
-            </div>
-
-            <div className="grid">
-              <KV label="Qty" value={record.Qty} />
-              <KV
-                label="Ext. Retail"
-                value={formatMoney(record["Ext. Retail"])}
-              />
-              <KV label="Brand" value={record.Brand} />
-              <KV label="Condition" value={record.Condition} />
-              <KV label="ASIN" value={record.ASIN} />
-              <KV label="UPC" value={record.UPC} />
-              <KV label="EAN" value={record.EAN} />
-              <KV label="Category" value={record.Category} />
-              <KV label="Subcategory" value={record.Subcategory} />
-              <KV label="Pallet ID" value={record["Pallet ID"]} />
-              <KV label="Lot ID" value={record["Lot ID"]} />
-              <KV
-                label="Sheet / Row"
-                value={`${record.sheet ?? "—"} / ${record.rowNumber ?? "—"}`}
-              />
-            </div>
-          </div>
-        )}
+        {/* Mobile controls at the bottom */}
+        <div className="mobileOnly" style={{ marginTop: 14 }}>
+          <hr className="sep" />
+          <Controls />
+        </div>
       </div>
 
-      <div style={{ marginTop: 18 }} className="small">
-        Want to add more manifests? Drop them in <code>/manifests</code>, commit,
-        and Vercel will rebuild the index on deploy.
+      <div style={{ marginTop: 18 }} className="small desktopOnly">
+        Want to add more manifests? Drop them in <code>/manifests</code>, commit, and Vercel will rebuild the index on deploy.
       </div>
 
       {scannerOpen && (
@@ -387,7 +364,6 @@ export default function AppShell() {
             setLastLpn(v);
             setQuery(v);
             setScannerOpen(false);
-            // auto-search will trigger, but calling lookup directly feels snappier:
             lookup(v);
           }}
         />
@@ -443,8 +419,7 @@ function ZxingScannerModal({
           const back = devices.find((d: any) =>
             String(d.label || "").toLowerCase().includes("back")
           );
-          preferredDeviceId =
-            back?.deviceId || devices[devices.length - 1]?.deviceId;
+          preferredDeviceId = back?.deviceId || devices[devices.length - 1]?.deviceId;
         } catch {}
 
         const controls = await codeReader.decodeFromVideoDevice(
@@ -517,19 +492,11 @@ function ZxingScannerModal({
           <div style={{ fontWeight: 950, fontSize: 16 }}>Scan barcode</div>
           <div className="row" style={{ justifyContent: "flex-end" }}>
             {torchAvailable && (
-              <button
-                className="button"
-                onClick={toggleTorch}
-                style={{ width: "auto" }}
-              >
+              <button className="button" onClick={toggleTorch} style={{ width: "auto" }}>
                 {torchOn ? "Torch: On" : "Torch: Off"}
               </button>
             )}
-            <button
-              className="button"
-              onClick={onClose}
-              style={{ width: "auto" }}
-            >
+            <button className="button" onClick={onClose} style={{ width: "auto" }}>
               Close
             </button>
           </div>
@@ -551,12 +518,7 @@ function ZxingScannerModal({
                 background: "rgba(0,0,0,0.25)",
               }}
             >
-              <video
-                ref={videoRef}
-                style={{ width: "100%", display: "block" }}
-                muted
-                playsInline
-              />
+              <video ref={videoRef} style={{ width: "100%", display: "block" }} muted playsInline />
             </div>
 
             <div className="small" style={{ marginTop: 10 }}>
