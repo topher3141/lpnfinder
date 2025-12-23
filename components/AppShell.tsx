@@ -32,18 +32,29 @@ function formatMoney(value: any) {
 
 export default function AppShell() {
   const [meta, setMeta] = useState<Meta | null>(null);
+
+  // scanning/search
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("Ready. Scan or type an LPN.");
   const [record, setRecord] = useState<any | null>(null);
   const [found, setFound] = useState<boolean | null>(null);
 
-  // Scanner modal
+  // ✅ Scan mode options
+  const [scanMode, setScanMode] = useState(true);
+  const [autoClear, setAutoClear] = useState(true);
+
+  // camera modal
   const [scannerOpen, setScannerOpen] = useState(false);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
 
+  // Keep last scanned LPN visible even if we auto-clear the input
+  const [lastLpn, setLastLpn] = useState<string>("");
+
   useEffect(() => {
+    // initial focus
     inputRef.current?.focus();
+
     (async () => {
       try {
         const res = await fetch("/index/meta.json", { cache: "no-store" });
@@ -52,13 +63,20 @@ export default function AppShell() {
     })();
   }, []);
 
+  function refocusSoon() {
+    setTimeout(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }, 30);
+  }
+
   async function lookup(lpnOverride?: string) {
     const lpn = normalizeLpn(lpnOverride ?? query);
     if (!lpn) return;
 
+    setLastLpn(lpn);
     setStatus("Searching…");
     setFound(null);
-    setRecord(null);
 
     const shard = shardFor(lpn);
     try {
@@ -84,11 +102,17 @@ export default function AppShell() {
       setFound(true);
       setRecord(rec);
       setStatus(`Match found for ${lpn}`);
+
+      // ✅ Auto-clear after a successful scan/search for rapid scanning
+      if (autoClear) {
+        setQuery("");
+        refocusSoon();
+      }
     } catch (e: any) {
       setFound(false);
       setStatus(`Lookup failed: ${e?.message || e}`);
     } finally {
-      setTimeout(() => inputRef.current?.focus(), 50);
+      if (scanMode) refocusSoon();
     }
   }
 
@@ -136,6 +160,34 @@ export default function AppShell() {
       </div>
 
       <div className="card">
+        {/* ✅ Scan mode controls */}
+        <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
+          <span className="badge">
+            <label style={{ display: "inline-flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={scanMode}
+                onChange={(e) => {
+                  setScanMode(e.target.checked);
+                  setTimeout(() => inputRef.current?.focus(), 50);
+                }}
+              />
+              Scan Mode
+            </label>
+          </span>
+
+          <span className="badge">
+            <label style={{ display: "inline-flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={autoClear}
+                onChange={(e) => setAutoClear(e.target.checked)}
+              />
+              Auto-clear
+            </label>
+          </span>
+        </div>
+
         <div className="row" style={{ alignItems: "flex-start" }}>
           <div style={{ flex: 1, minWidth: 260 }}>
             <input
@@ -144,6 +196,17 @@ export default function AppShell() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Scan / type LPN…"
+              autoCapitalize="characters"
+              autoCorrect="off"
+              spellCheck={false}
+              // ✅ Hint to mobile: don’t show keyboard if possible
+              inputMode={scanMode ? "none" : "text"}
+              // ✅ keep focus for scan guns; select text if user taps in
+              onFocus={(e) => e.currentTarget.select()}
+              // ✅ in scan mode, if focus is lost, pull it back
+              onBlur={() => {
+                if (scanMode) refocusSoon();
+              }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   lookup();
@@ -152,8 +215,9 @@ export default function AppShell() {
               }}
             />
             <div className="small" style={{ marginTop: 8 }}>
-              Tip: Most barcode scanners “type” the value and send Enter. Keep
-              this field focused.
+              {scanMode
+                ? "Scan Mode: input stays focused; scans search instantly; field clears after a match."
+                : "Tip: Most barcode scanners “type” the value and send Enter."}
             </div>
           </div>
 
@@ -175,10 +239,9 @@ export default function AppShell() {
             className="button"
             onClick={() => {
               setQuery("");
-              setRecord(null);
               setFound(null);
               setStatus("Ready. Scan or type an LPN.");
-              inputRef.current?.focus();
+              if (scanMode) refocusSoon();
             }}
           >
             Clear
@@ -191,7 +254,7 @@ export default function AppShell() {
         {found === false && (
           <div style={{ marginTop: 14 }} className="card">
             <div style={{ fontWeight: 950, fontSize: 16, color: "var(--bad)" }}>
-              No match
+              No match {lastLpn ? `(${lastLpn})` : ""}
             </div>
             <div className="small" style={{ marginTop: 6 }}>
               If you just added a new file, make sure it’s in{" "}
@@ -200,19 +263,14 @@ export default function AppShell() {
           </div>
         )}
 
-        {found === true && record && (
+        {record && (
           <div style={{ marginTop: 14 }} className="card">
             <div
               className="row"
-              style={{
-                justifyContent: "space-between",
-                alignItems: "flex-start",
-              }}
+              style={{ justifyContent: "space-between", alignItems: "flex-start" }}
             >
               <div style={{ fontSize: 18, fontWeight: 950 }}>
-                {String(
-                  record["Item Description"] || record["Description"] || "Item"
-                )}
+                {String(record["Item Description"] || record["Description"] || "Item")}
               </div>
               <span className="badge">
                 Source:{" "}
@@ -230,7 +288,7 @@ export default function AppShell() {
               <div style={{ textAlign: "right" }}>
                 <div className="priceLabel">LPN</div>
                 <div style={{ fontSize: 18, fontWeight: 950 }}>
-                  {String(record.LPN || "—")}
+                  {String(lastLpn || record.LPN || "—")}
                 </div>
               </div>
             </div>
@@ -266,6 +324,7 @@ export default function AppShell() {
           onClose={() => setScannerOpen(false)}
           onScanned={(value) => {
             const v = normalizeLpn(value);
+            setLastLpn(v);
             setQuery(v);
             setScannerOpen(false);
             lookup(v);
@@ -286,10 +345,7 @@ function KV({ label, value }: { label: string; value: any }) {
   );
 }
 
-/**
- * ZXing camera scanner modal (better 1D performance than html5-qrcode for many setups).
- * Uses @zxing/browser decodeFromVideoDevice. :contentReference[oaicite:2]{index=2}
- */
+/** ZXing camera scanner modal (unchanged from your ZXing version) */
 function ZxingScannerModal({
   onClose,
   onScanned,
@@ -314,46 +370,38 @@ function ZxingScannerModal({
         const { BrowserMultiFormatReader } = mod as any;
 
         codeReader = new BrowserMultiFormatReader(undefined, {
-          // try a little harder; helps some 1D scans
           delayBetweenScanAttempts: 25,
         });
 
         const video = videoRef.current;
         if (!video) return;
 
-        // Try to pick the back camera if we can
         let preferredDeviceId: string | undefined = undefined;
         try {
           const devices = await BrowserMultiFormatReader.listVideoInputDevices();
-          // pick a device with "back" in the label if labels are available
           const back = devices.find((d: any) =>
             String(d.label || "").toLowerCase().includes("back")
           );
-          preferredDeviceId = back?.deviceId || devices[devices.length - 1]?.deviceId;
-        } catch {
-          // If we can't enumerate (permissions not granted yet), we'll let it pick default
-        }
+          preferredDeviceId =
+            back?.deviceId || devices[devices.length - 1]?.deviceId;
+        } catch {}
 
-        // Start continuous decode from camera
         const controls = await codeReader.decodeFromVideoDevice(
           preferredDeviceId,
           video,
-          (result: any, error: any, controlsFromCb: any) => {
+          (result: any) => {
             if (cancelled) return;
             if (result) {
               const text =
-                typeof result.getText === "function" ? result.getText() : String(result?.text ?? "");
-              if (text) {
-                onScanned(text);
-              }
+                typeof result.getText === "function"
+                  ? result.getText()
+                  : String(result?.text ?? "");
+              if (text) onScanned(text);
             }
-            // ignore "not found" errors; they happen constantly while scanning
           }
         );
 
         controlsRef.current = controls;
-
-        // Torch support if available (not on all browsers/devices)
         setTorchAvailable(Boolean(controls?.switchTorch));
       } catch (e: any) {
         setErr(e?.message || String(e));
@@ -364,9 +412,7 @@ function ZxingScannerModal({
       cancelled = true;
       (async () => {
         try {
-          if (controlsRef.current?.stop) {
-            controlsRef.current.stop();
-          }
+          if (controlsRef.current?.stop) controlsRef.current.stop();
         } catch {}
         try {
           if (codeReader?.reset) codeReader.reset();
@@ -410,11 +456,19 @@ function ZxingScannerModal({
           <div style={{ fontWeight: 950, fontSize: 16 }}>Scan barcode</div>
           <div className="row" style={{ justifyContent: "flex-end" }}>
             {torchAvailable && (
-              <button className="button" onClick={toggleTorch} style={{ width: "auto" }}>
+              <button
+                className="button"
+                onClick={toggleTorch}
+                style={{ width: "auto" }}
+              >
                 {torchOn ? "Torch: On" : "Torch: Off"}
               </button>
             )}
-            <button className="button" onClick={onClose} style={{ width: "auto" }}>
+            <button
+              className="button"
+              onClick={onClose}
+              style={{ width: "auto" }}
+            >
               Close
             </button>
           </div>
@@ -425,13 +479,9 @@ function ZxingScannerModal({
         {err ? (
           <div className="small" style={{ color: "var(--bad)" }}>
             Camera/scanner error: {err}
-            <div className="small" style={{ marginTop: 6 }}>
-              Tip: Allow camera permission for the site. Try brighter light + hold the barcode steady.
-            </div>
           </div>
         ) : (
           <>
-            {/* Wider preview helps 1D scanning */}
             <div
               style={{
                 borderRadius: 16,
@@ -449,7 +499,7 @@ function ZxingScannerModal({
             </div>
 
             <div className="small" style={{ marginTop: 10 }}>
-              Aim at the barcode. For best results: bright light, fill the frame, and keep it steady for ~1 second.
+              Aim at the barcode. Bright light + fill the frame improves results.
             </div>
           </>
         )}
