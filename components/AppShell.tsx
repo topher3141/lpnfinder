@@ -17,8 +17,7 @@ function normalizeLpn(input: string) {
 
 function shardFor(lpn: string) {
   const s = normalizeLpn(lpn);
-  const head = (s.slice(0, 2) || "ZZ").padEnd(2, "Z");
-  return head;
+  return (s.slice(0, 2) || "ZZ").padEnd(2, "Z");
 }
 
 function formatMoney(value: any) {
@@ -34,6 +33,8 @@ export default function AppShell() {
   const [record, setRecord] = useState<any | null>(null);
   const [found, setFound] = useState<boolean | null>(null);
 
+  const [scannerOpen, setScannerOpen] = useState(false);
+
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -46,8 +47,8 @@ export default function AppShell() {
     })();
   }, []);
 
-  async function lookup() {
-    const lpn = normalizeLpn(query);
+  async function lookup(lpnMaybe?: string) {
+    const lpn = normalizeLpn(lpnMaybe ?? query);
     if (!lpn) return;
 
     setStatus("Searching…");
@@ -97,9 +98,18 @@ export default function AppShell() {
         </div>
 
         <div className="row" style={{ justifyContent: "flex-end" }}>
-          <span className="badge">Manifests: <strong style={{ color: "var(--text)" }}>{meta?.manifestCount ?? "—"}</strong></span>
-          <span className="badge">Unique LPNs: <strong style={{ color: "var(--text)" }}>{meta?.uniqueLpns ?? "—"}</strong></span>
-          <span className="badge">Updated: <strong style={{ color: "var(--text)" }}>{meta?.updatedAt ? new Date(meta.updatedAt).toLocaleString() : "—"}</strong></span>
+          <span className="badge">
+            Manifests: <strong style={{ color: "var(--text)" }}>{meta?.manifestCount ?? "—"}</strong>
+          </span>
+          <span className="badge">
+            Unique LPNs: <strong style={{ color: "var(--text)" }}>{meta?.uniqueLpns ?? "—"}</strong>
+          </span>
+          <span className="badge">
+            Updated:{" "}
+            <strong style={{ color: "var(--text)" }}>
+              {meta?.updatedAt ? new Date(meta.updatedAt).toLocaleString() : "—"}
+            </strong>
+          </span>
         </div>
       </div>
 
@@ -124,8 +134,33 @@ export default function AppShell() {
             </div>
           </div>
 
-          <button className="button" onClick={lookup}>Search</button>
-          <button className="button" onClick={() => { setQuery(""); setRecord(null); setFound(null); setStatus("Ready. Scan or type an LPN."); inputRef.current?.focus(); }}>Clear</button>
+          {/* Camera scanner icon */}
+          <button
+            className="button"
+            onClick={() => setScannerOpen(true)}
+            title="Scan with camera"
+            aria-label="Scan with camera"
+            style={{ width: 52, padding: "11px 0", display: "grid", placeItems: "center" }}
+          >
+            {/* simple icon */}
+            <span style={{ fontSize: 20 }}>📷</span>
+          </button>
+
+          <button className="button" onClick={() => lookup()}>
+            Search
+          </button>
+          <button
+            className="button"
+            onClick={() => {
+              setQuery("");
+              setRecord(null);
+              setFound(null);
+              setStatus("Ready. Scan or type an LPN.");
+              inputRef.current?.focus();
+            }}
+          >
+            Clear
+          </button>
         </div>
 
         <hr className="sep" />
@@ -146,7 +181,9 @@ export default function AppShell() {
               <div style={{ fontSize: 18, fontWeight: 950 }}>
                 {String(record["Item Description"] || record["Description"] || "Item")}
               </div>
-              <span className="badge">Source: <strong style={{ color: "var(--text)" }}>{String(record.__sourceFile || "—")}</strong></span>
+              <span className="badge">
+                Source: <strong style={{ color: "var(--text)" }}>{String(record.__sourceFile || "—")}</strong>
+              </span>
             </div>
 
             <div className="heroRetail">
@@ -181,6 +218,18 @@ export default function AppShell() {
       <div style={{ marginTop: 18 }} className="small">
         Want to add more manifests? Drop them in <code>/manifests</code>, commit, and Vercel will rebuild the index on deploy.
       </div>
+
+      {scannerOpen && (
+        <ScannerModal
+          onClose={() => setScannerOpen(false)}
+          onScanned={(value) => {
+            const v = normalizeLpn(value);
+            setQuery(v);
+            setScannerOpen(false);
+            lookup(v);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -191,6 +240,101 @@ function KV({ label, value }: { label: string; value: any }) {
     <div className="kv">
       <div className="k">{label}</div>
       <div className="v">{v}</div>
+    </div>
+  );
+}
+
+/** Camera scanner modal using html5-qrcode */
+function ScannerModal({ onClose, onScanned }: { onClose: () => void; onScanned: (value: string) => void }) {
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let qr: any = null;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const mod = await import("html5-qrcode");
+        const { Html5Qrcode } = mod;
+
+        qr = new Html5Qrcode("qr-reader");
+        // Try to scan common barcode formats + QR
+        await qr.start(
+          { facingMode: "environment" },
+          {
+            fps: 10,
+            qrbox: { width: 260, height: 200 },
+            // supports a lot of formats; leave defaults unless you want to restrict
+          },
+          (decodedText: string) => {
+            if (cancelled) return;
+            onScanned(decodedText);
+          },
+          () => {}
+        );
+      } catch (e: any) {
+        setErr(e?.message || String(e));
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      (async () => {
+        try {
+          if (qr) {
+            await qr.stop();
+            await qr.clear();
+          }
+        } catch {}
+      })();
+    };
+  }, [onScanned]);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.65)",
+        display: "grid",
+        placeItems: "center",
+        padding: 16,
+        zIndex: 50,
+      }}
+      onClick={onClose}
+    >
+      <div
+        className="card"
+        style={{ width: "min(560px, 100%)" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="row" style={{ justifyContent: "space-between" }}>
+          <div style={{ fontWeight: 950, fontSize: 16 }}>Scan barcode</div>
+          <button className="button" onClick={onClose} style={{ width: "auto" }}>
+            Close
+          </button>
+        </div>
+
+        <hr className="sep" />
+
+        {err ? (
+          <div className="small" style={{ color: "var(--bad)" }}>
+            Camera error: {err}
+            <div className="small" style={{ marginTop: 6 }}>
+              Tip: On iPhone, you must allow camera permission in Safari settings.
+            </div>
+          </div>
+        ) : (
+          <>
+            <div id="qr-reader" style={{ width: "100%", borderRadius: 16, overflow: "hidden" }} />
+            <div className="small" style={{ marginTop: 10 }}>
+              Point your camera at the barcode. It will auto-fill and search.
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
