@@ -69,41 +69,56 @@ function amazonImageCandidates(asin: string) {
  * Goal: "good enough" for fast processing, not perfect.
  */
 function extractSizeGuess(title: string): string {
-  const t = String(title || "").trim();
-  if (!t) return "";
+  const t = String(title || "").toLowerCase();
+  if (!t) return "—";
 
-  // Normalize whitespace for regex scanning
-  const s = t.replace(/\s+/g, " ");
+  // Normalize separators to spaces
+  const s = t.replace(/[_\-()/,.;:]+/g, " ").replace(/\s+/g, " ").trim();
 
-  // 1) Explicit "Size ..." patterns
-  // Examples: "Size 10", "Size: XL", "Size M", "Sz 8.5", "SIZE-32X34"
-  const m1 = s.match(/\b(?:size|sz)\s*[:\-]?\s*([A-Z]{1,4}|\d{1,3}(?:\.\d)?(?:\s?[A-Z]{1,3})?|\d{1,3}\s?x\s?\d{1,3})\b/i);
-  if (m1?.[1]) return m1[1].toUpperCase().replace(/\s+/g, "");
+  // 1) Explicit "size ..." patterns (only letter sizes, not numbers)
+  // Examples: "Size: Large", "size xl", "sz medium", "SIZE - 2XL"
+  const m1 = s.match(/\b(?:size|sz)\s*[:\-]?\s*(xxs|xs|small|s|medium|m|large|l|xl|xxl|xxxl|2xl|3xl|4xl|5xl)\b/i);
+  if (m1?.[1]) return normalizeSizeToken(m1[1]);
 
-  // 2) Common letter sizes (standalone tokens)
-  // XS, S, M, L, XL, XXL, 2XL, 3XL, etc
-  const m2 = s.match(/\b(XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL|4XL|5XL)\b/i);
-  if (m2?.[1]) return m2[1].toUpperCase();
+  // 2) Standalone tokens (word sizes + letter sizes)
+  // Only accept if they appear as separate words/tokens.
+  const m2 = s.match(/\b(xxS|xxs|xs|small|s|medium|m|large|l|xl|xxl|xxxl|2xl|3xl|4xl|5xl)\b/i);
+  if (m2?.[1]) return normalizeSizeToken(m2[1]);
 
-  // 3) Pants/waist/length style like 32x34, 30 x 32
-  const m3 = s.match(/\b(\d{2,3}\s?x\s?\d{2,3})\b/i);
-  if (m3?.[1]) return m3[1].toUpperCase().replace(/\s+/g, "");
+  // 3) Common combined patterns like "x-large", "xx-large"
+  // Convert "x large" -> XL, "xx large" -> XXL
+  if (/\bxx\s+large\b/i.test(s)) return "XXL";
+  if (/\bx\s+large\b/i.test(s)) return "XL";
 
-  // 4) Shoe-like decimals: 8.5, 10.5, 11.0 (only if hinted by "shoe/sneaker/boot" or "women/men")
-  if (/\b(shoe|sneaker|boot|loafer|heel|sandal|men'?s|women'?s|kid'?s|youth)\b/i.test(s)) {
-    const m4 = s.match(/\b(\d{1,2}(?:\.\d)?)\b/);
-    if (m4?.[1]) return m4[1];
-  }
-
-  // 5) Kids sizing like "2T", "3T", "4T"
-  const m5 = s.match(/\b(\dT)\b/i);
-  if (m5?.[1]) return m5[1].toUpperCase();
-
-  // 6) "One Size" / OSFA
-  if (/\b(one size|osfa|one-size)\b/i.test(s)) return "ONE SIZE";
-
-  return "";
+  // If we don't see a clear size token, return dash (unknown)
+  return "—";
 }
+
+function normalizeSizeToken(raw: string): string {
+  const r = String(raw || "").toLowerCase().replace(/\s+/g, "");
+
+  // Word sizes
+  if (r === "small") return "S";
+  if (r === "medium") return "M";
+  if (r === "large") return "L";
+
+  // Letter sizes / extended
+  if (r === "xxs") return "XXS";
+  if (r === "xs") return "XS";
+  if (r === "s") return "S";
+  if (r === "m") return "M";
+  if (r === "l") return "L";
+  if (r === "xl") return "XL";
+  if (r === "xxl") return "XXL";
+  if (r === "xxxl") return "XXXL";
+  if (r === "2xl") return "2XL";
+  if (r === "3xl") return "3XL";
+  if (r === "4xl") return "4XL";
+  if (r === "5xl") return "5XL";
+
+  return "—";
+}
+
 
 export default function AppShell() {
   const [meta, setMeta] = useState<Meta | null>(null);
