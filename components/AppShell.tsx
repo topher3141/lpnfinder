@@ -42,7 +42,6 @@ function looksLikeFullLpn(v: string) {
 
 function normalizeAsin(v: any) {
   const s = String(v ?? "").trim().toUpperCase();
-  // ASINs are typically 10 chars alphanumeric
   return /^[A-Z0-9]{10}$/.test(s) ? s : "";
 }
 
@@ -63,6 +62,47 @@ function amazonImageCandidates(asin: string) {
     `https://m.media-amazon.com/images/P/${asin}.01._SX300_.jpg`,
     `https://m.media-amazon.com/images/P/${asin}.01._SX160_.jpg`,
   ];
+}
+
+/**
+ * Heuristic: guess size from an item title/description.
+ * Goal: "good enough" for fast processing, not perfect.
+ */
+function extractSizeGuess(title: string): string {
+  const t = String(title || "").trim();
+  if (!t) return "";
+
+  // Normalize whitespace for regex scanning
+  const s = t.replace(/\s+/g, " ");
+
+  // 1) Explicit "Size ..." patterns
+  // Examples: "Size 10", "Size: XL", "Size M", "Sz 8.5", "SIZE-32X34"
+  const m1 = s.match(/\b(?:size|sz)\s*[:\-]?\s*([A-Z]{1,4}|\d{1,3}(?:\.\d)?(?:\s?[A-Z]{1,3})?|\d{1,3}\s?x\s?\d{1,3})\b/i);
+  if (m1?.[1]) return m1[1].toUpperCase().replace(/\s+/g, "");
+
+  // 2) Common letter sizes (standalone tokens)
+  // XS, S, M, L, XL, XXL, 2XL, 3XL, etc
+  const m2 = s.match(/\b(XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL|4XL|5XL)\b/i);
+  if (m2?.[1]) return m2[1].toUpperCase();
+
+  // 3) Pants/waist/length style like 32x34, 30 x 32
+  const m3 = s.match(/\b(\d{2,3}\s?x\s?\d{2,3})\b/i);
+  if (m3?.[1]) return m3[1].toUpperCase().replace(/\s+/g, "");
+
+  // 4) Shoe-like decimals: 8.5, 10.5, 11.0 (only if hinted by "shoe/sneaker/boot" or "women/men")
+  if (/\b(shoe|sneaker|boot|loafer|heel|sandal|men'?s|women'?s|kid'?s|youth)\b/i.test(s)) {
+    const m4 = s.match(/\b(\d{1,2}(?:\.\d)?)\b/);
+    if (m4?.[1]) return m4[1];
+  }
+
+  // 5) Kids sizing like "2T", "3T", "4T"
+  const m5 = s.match(/\b(\dT)\b/i);
+  if (m5?.[1]) return m5[1].toUpperCase();
+
+  // 6) "One Size" / OSFA
+  if (/\b(one size|osfa|one-size)\b/i.test(s)) return "ONE SIZE";
+
+  return "";
 }
 
 export default function AppShell() {
@@ -139,7 +179,6 @@ export default function AppShell() {
       setRecord(null);
       setStatus(`Lookup failed: ${e?.message || e}`);
     } finally {
-      // clear for next scan (match OR no-match) when in scan mode
       if (scanMode && autoClear) {
         setQuery("");
         lastTriggeredRef.current = "";
@@ -148,7 +187,6 @@ export default function AppShell() {
     }
   }
 
-  // auto-search when a full LPN is present
   useEffect(() => {
     if (!scanMode || !autoSearch) return;
 
@@ -166,33 +204,24 @@ export default function AppShell() {
     return toNumberMoney(record["Unit Retail"] ?? record["Retail"] ?? record["Ext. Retail"]);
   }, [record]);
 
-  const retailValue = useMemo(() => {
-    return retailNumber == null ? "—" : formatMoney(retailNumber);
-  }, [retailNumber]);
+  const retailValue = useMemo(() => (retailNumber == null ? "—" : formatMoney(retailNumber)), [retailNumber]);
 
-  // Target sell: 50% of retail
   const targetSellNumber = useMemo(() => {
     if (retailNumber == null) return null;
     return Math.round(retailNumber * 0.5 * 100) / 100;
   }, [retailNumber]);
 
-  const targetSellValue = useMemo(() => {
-    return targetSellNumber == null ? "—" : formatMoney(targetSellNumber);
-  }, [targetSellNumber]);
+  const targetSellValue = useMemo(() => (targetSellNumber == null ? "—" : formatMoney(targetSellNumber)), [targetSellNumber]);
 
   const itemTitle = useMemo(() => {
     if (!record) return "";
     return String(record["Item Description"] || record["Description"] || "Item");
   }, [record]);
 
-  const asin = useMemo(() => {
-    if (!record) return "";
-    return normalizeAsin(record.ASIN);
-  }, [record]);
+  const sizeGuess = useMemo(() => extractSizeGuess(itemTitle), [itemTitle]);
 
-  const amazonUrl = useMemo(() => {
-    return asin ? amazonDpUrl(asin) : "";
-  }, [asin]);
+  const asin = useMemo(() => (record ? normalizeAsin(record.ASIN) : ""), [record]);
+  const amazonUrl = useMemo(() => (asin ? amazonDpUrl(asin) : ""), [asin]);
 
   function Controls({ className }: { className?: string }) {
     return (
@@ -214,24 +243,14 @@ export default function AppShell() {
 
           <span className="badge">
             <label style={{ display: "inline-flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
-              <input
-                type="checkbox"
-                checked={autoSearch}
-                onChange={(e) => setAutoSearch(e.target.checked)}
-                disabled={!scanMode}
-              />
+              <input type="checkbox" checked={autoSearch} onChange={(e) => setAutoSearch(e.target.checked)} disabled={!scanMode} />
               Auto-search
             </label>
           </span>
 
           <span className="badge">
             <label style={{ display: "inline-flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
-              <input
-                type="checkbox"
-                checked={autoClear}
-                onChange={(e) => setAutoClear(e.target.checked)}
-                disabled={!scanMode}
-              />
+              <input type="checkbox" checked={autoClear} onChange={(e) => setAutoClear(e.target.checked)} disabled={!scanMode} />
               Auto-clear
             </label>
           </span>
@@ -247,8 +266,8 @@ export default function AppShell() {
         <div className="brand">
           <h1>LPN Finder</h1>
           <p>
-            Manifests are stored <strong>internally in GitHub</strong> under <code>/manifests</code>. Vercel indexes them
-            automatically on deploy. Then just scan/type an LPN.
+            Manifests are stored <strong>internally in GitHub</strong> under <code>/manifests</code>. Vercel indexes them automatically on
+            deploy. Then just scan/type an LPN.
           </p>
         </div>
 
@@ -261,9 +280,7 @@ export default function AppShell() {
           </span>
           <span className="badge">
             Updated:{" "}
-            <strong style={{ color: "var(--text)" }}>
-              {meta?.updatedAt ? new Date(meta.updatedAt).toLocaleString() : "—"}
-            </strong>
+            <strong style={{ color: "var(--text)" }}>{meta?.updatedAt ? new Date(meta.updatedAt).toLocaleString() : "—"}</strong>
           </span>
         </div>
       </div>
@@ -279,13 +296,12 @@ export default function AppShell() {
       </div>
 
       <div className="card">
-        {/* Desktop controls near the top */}
         <Controls className="desktopOnly" />
         <div className="desktopOnly">
           <hr className="sep" />
         </div>
 
-        {/* Input row */}
+        {/* Input */}
         <div className="row" style={{ alignItems: "flex-start" }}>
           <div style={{ flex: 1, minWidth: 260 }}>
             <input
@@ -314,12 +330,7 @@ export default function AppShell() {
             </div>
           </div>
 
-          <button
-            className="button iconButton"
-            onClick={() => setScannerOpen(true)}
-            title="Scan with camera"
-            aria-label="Scan with camera"
-          >
+          <button className="button iconButton" onClick={() => setScannerOpen(true)} title="Scan with camera" aria-label="Scan with camera">
             📷
           </button>
 
@@ -347,13 +358,12 @@ export default function AppShell() {
         {/* Results */}
         {record && (
           <div style={{ marginTop: 12 }} className="card">
-            {/* Retail + Target Sell */}
             <div className="heroRetail" style={{ marginTop: 0 }}>
               <div>
                 <div className="priceLabel">Retail</div>
                 <div className="price">{retailValue}</div>
 
-                {/* Target sell (highlighted but less dominant) */}
+                {/* Target sell */}
                 <div
                   style={{
                     marginTop: 10,
@@ -365,10 +375,31 @@ export default function AppShell() {
                   }}
                 >
                   <div className="priceLabel">Target Sell (50% off)</div>
-                  <div style={{ fontSize: 24, fontWeight: 950, color: "var(--good)", lineHeight: 1.1 }}>
-                    {targetSellValue}
-                  </div>
+                  <div style={{ fontSize: 24, fontWeight: 950, color: "var(--good)", lineHeight: 1.1 }}>{targetSellValue}</div>
                 </div>
+
+                {/* ✅ Size guess box */}
+                {sizeGuess ? (
+                  <div
+                    style={{
+                      marginTop: 10,
+                      display: "inline-block",
+                      padding: "10px 12px",
+                      borderRadius: 14,
+                      border: "1px solid rgba(251,191,36,0.35)",
+                      background: "rgba(251,191,36,0.10)",
+                      marginLeft: 10,
+                    }}
+                    title="Best guess from item description. Verify physical size—returns can be wrong."
+                  >
+                    <div className="priceLabel">
+                      Size (best guess) <span aria-hidden="true">⚠️</span>
+                    </div>
+                    <div style={{ fontSize: 22, fontWeight: 950, color: "rgba(255,255,255,0.92)", lineHeight: 1.1 }}>
+                      {sizeGuess}
+                    </div>
+                  </div>
+                ) : null}
 
                 <div className="small" style={{ marginTop: 8 }}>
                   Last LPN: <strong style={{ color: "var(--text)" }}>{lastLpn || record.LPN || "—"}</strong>
@@ -382,7 +413,7 @@ export default function AppShell() {
 
             <div style={{ marginTop: 10, fontSize: 18, fontWeight: 950 }}>{itemTitle}</div>
 
-            {/* ✅ Amazon link + image (best-effort) */}
+            {/* Amazon link + image */}
             {asin ? (
               <div
                 style={{
@@ -433,7 +464,6 @@ export default function AppShell() {
               <KV label="Pallet ID" value={record["Pallet ID"]} />
               <KV label="Lot ID" value={record["Lot ID"]} />
 
-              {/* Extra fields only on desktop */}
               <div className="desktopOnly">
                 <div className="grid">
                   <KV label="ASIN" value={record.ASIN} />
@@ -456,7 +486,6 @@ export default function AppShell() {
           </div>
         )}
 
-        {/* Mobile controls at the bottom */}
         <div className="mobileOnly" style={{ marginTop: 14 }}>
           <hr className="sep" />
           <Controls />
@@ -506,7 +535,6 @@ function AmazonImage({ asin, href }: { asin: string; href: string }) {
   const src = candidates[idx];
 
   if (failed || !src) {
-    // no image found; still allow click via a small placeholder
     return (
       <a
         href={href}
@@ -555,7 +583,6 @@ function AmazonImage({ asin, href }: { asin: string; href: string }) {
         alt={`Amazon image ${asin}`}
         style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
         onError={() => {
-          // try next candidate; if out, fallback
           if (idx < candidates.length - 1) setIdx((v) => v + 1);
           else setFailed(true);
         }}
@@ -598,26 +625,17 @@ function ZxingScannerModal({
         let preferredDeviceId: string | undefined = undefined;
         try {
           const devices = await BrowserMultiFormatReader.listVideoInputDevices();
-          const back = devices.find((d: any) =>
-            String(d.label || "").toLowerCase().includes("back")
-          );
+          const back = devices.find((d: any) => String(d.label || "").toLowerCase().includes("back"));
           preferredDeviceId = back?.deviceId || devices[devices.length - 1]?.deviceId;
         } catch {}
 
-        const controls = await codeReader.decodeFromVideoDevice(
-          preferredDeviceId,
-          video,
-          (result: any) => {
-            if (cancelled) return;
-            if (result) {
-              const text =
-                typeof result.getText === "function"
-                  ? result.getText()
-                  : String(result?.text ?? "");
-              if (text) onScanned(text);
-            }
+        const controls = await codeReader.decodeFromVideoDevice(preferredDeviceId, video, (result: any) => {
+          if (cancelled) return;
+          if (result) {
+            const text = typeof result.getText === "function" ? result.getText() : String(result?.text ?? "");
+            if (text) onScanned(text);
           }
-        );
+        });
 
         controlsRef.current = controls;
         setTorchAvailable(Boolean(controls?.switchTorch));
@@ -665,11 +683,7 @@ function ZxingScannerModal({
       }}
       onClick={onClose}
     >
-      <div
-        className="card"
-        style={{ width: "min(720px, 100%)" }}
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="card" style={{ width: "min(720px, 100%)" }} onClick={(e) => e.stopPropagation()}>
         <div className="row" style={{ justifyContent: "space-between" }}>
           <div style={{ fontWeight: 950, fontSize: 16 }}>Scan barcode</div>
           <div className="row" style={{ justifyContent: "flex-end" }}>
