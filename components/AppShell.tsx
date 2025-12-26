@@ -77,12 +77,12 @@ function extractSizeGuess(title: string): string {
 
   // 1) Explicit "size ..." patterns (only letter sizes, not numbers)
   // Examples: "Size: Large", "size xl", "sz medium", "SIZE - 2XL"
-  const m1 = s.match(/\b(?:size|sz)\s*[:\-]?\s*(xxs|xs|small|s|medium|m|large|l|xl|xxl|xxxl|2xl|3xl|4xl|5xl)\b/i);
+  const m1 = s.match(/\b(?:size|sz)\s*[:\-]?\s*(xxs|xs|small|medium|m|large|l|xl|xxl|xxxl|2xl|3xl|4xl|5xl)\b/i);
   if (m1?.[1]) return normalizeSizeToken(m1[1]);
 
   // 2) Standalone tokens (word sizes + letter sizes)
   // Only accept if they appear as separate words/tokens.
-  const m2 = s.match(/\b(xxS|xxs|xs|small|s|medium|m|large|l|xl|xxl|xxxl|2xl|3xl|4xl|5xl)\b/i);
+  const m2 = s.match(/\b(xxS|xxs|xs|small|medium|m|large|l|xl|xxl|xxxl|2xl|3xl|4xl|5xl)\b/i);
   if (m2?.[1]) return normalizeSizeToken(m2[1]);
 
   // 3) Common combined patterns like "x-large", "xx-large"
