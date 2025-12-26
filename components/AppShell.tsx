@@ -40,6 +40,31 @@ function looksLikeFullLpn(v: string) {
   return /^LPN[A-Z0-9]{10}$/.test(s);
 }
 
+function normalizeAsin(v: any) {
+  const s = String(v ?? "").trim().toUpperCase();
+  // ASINs are typically 10 chars alphanumeric
+  return /^[A-Z0-9]{10}$/.test(s) ? s : "";
+}
+
+function amazonDpUrl(asin: string) {
+  return `https://www.amazon.com/dp/${asin}`;
+}
+
+/**
+ * Best-effort Amazon image URLs.
+ * Not guaranteed (Amazon changes these / blocks some), but often works.
+ */
+function amazonImageCandidates(asin: string) {
+  return [
+    `https://images-na.ssl-images-amazon.com/images/P/${asin}.01._SX480_.jpg`,
+    `https://images-na.ssl-images-amazon.com/images/P/${asin}.01._SX300_.jpg`,
+    `https://images-na.ssl-images-amazon.com/images/P/${asin}.01._SX160_.jpg`,
+    `https://m.media-amazon.com/images/P/${asin}.01._SX480_.jpg`,
+    `https://m.media-amazon.com/images/P/${asin}.01._SX300_.jpg`,
+    `https://m.media-amazon.com/images/P/${asin}.01._SX160_.jpg`,
+  ];
+}
+
 export default function AppShell() {
   const [meta, setMeta] = useState<Meta | null>(null);
 
@@ -61,7 +86,6 @@ export default function AppShell() {
 
   useEffect(() => {
     inputRef.current?.focus();
-
     (async () => {
       try {
         const res = await fetch("/index/meta.json", { cache: "no-store" });
@@ -146,7 +170,7 @@ export default function AppShell() {
     return retailNumber == null ? "—" : formatMoney(retailNumber);
   }, [retailNumber]);
 
-  // ✅ Target sell: 50% off retail = retail * 0.5
+  // Target sell: 50% of retail
   const targetSellNumber = useMemo(() => {
     if (retailNumber == null) return null;
     return Math.round(retailNumber * 0.5 * 100) / 100;
@@ -160,6 +184,15 @@ export default function AppShell() {
     if (!record) return "";
     return String(record["Item Description"] || record["Description"] || "Item");
   }, [record]);
+
+  const asin = useMemo(() => {
+    if (!record) return "";
+    return normalizeAsin(record.ASIN);
+  }, [record]);
+
+  const amazonUrl = useMemo(() => {
+    return asin ? amazonDpUrl(asin) : "";
+  }, [asin]);
 
   function Controls({ className }: { className?: string }) {
     return (
@@ -320,7 +353,7 @@ export default function AppShell() {
                 <div className="priceLabel">Retail</div>
                 <div className="price">{retailValue}</div>
 
-                {/* ✅ Target sell (highlighted but less dominant) */}
+                {/* Target sell (highlighted but less dominant) */}
                 <div
                   style={{
                     marginTop: 10,
@@ -348,6 +381,49 @@ export default function AppShell() {
             </div>
 
             <div style={{ marginTop: 10, fontSize: 18, fontWeight: 950 }}>{itemTitle}</div>
+
+            {/* ✅ Amazon link + image (best-effort) */}
+            {asin ? (
+              <div
+                style={{
+                  marginTop: 12,
+                  display: "flex",
+                  gap: 12,
+                  alignItems: "center",
+                  padding: 12,
+                  borderRadius: 16,
+                  border: "1px solid rgba(255,255,255,0.12)",
+                  background: "rgba(0,0,0,0.14)",
+                }}
+              >
+                <AmazonImage asin={asin} href={amazonUrl} />
+                <div style={{ minWidth: 0 }}>
+                  <div className="priceLabel">Amazon</div>
+                  <div style={{ fontWeight: 950, fontSize: 14 }}>
+                    ASIN: <span style={{ color: "var(--text)" }}>{asin}</span>
+                  </div>
+                  <a
+                    href={amazonUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{
+                      display: "inline-block",
+                      marginTop: 6,
+                      color: "var(--accent)",
+                      fontWeight: 900,
+                      textDecoration: "none",
+                      wordBreak: "break-all",
+                    }}
+                  >
+                    Open listing ↗
+                  </a>
+                </div>
+              </div>
+            ) : (
+              <div className="small" style={{ marginTop: 10 }}>
+                No ASIN found for this item.
+              </div>
+            )}
 
             <div className="grid" style={{ marginTop: 12 }}>
               <KV label="Qty" value={record.Qty} />
@@ -414,6 +490,77 @@ function KV({ label, value }: { label: string; value: any }) {
       <div className="k">{label}</div>
       <div className="v">{v}</div>
     </div>
+  );
+}
+
+function AmazonImage({ asin, href }: { asin: string; href: string }) {
+  const candidates = useMemo(() => amazonImageCandidates(asin), [asin]);
+  const [idx, setIdx] = useState(0);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setIdx(0);
+    setFailed(false);
+  }, [asin]);
+
+  const src = candidates[idx];
+
+  if (failed || !src) {
+    // no image found; still allow click via a small placeholder
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noreferrer"
+        style={{
+          width: 72,
+          height: 72,
+          borderRadius: 14,
+          border: "1px solid rgba(255,255,255,0.14)",
+          background: "rgba(255,255,255,0.06)",
+          display: "grid",
+          placeItems: "center",
+          textDecoration: "none",
+          color: "var(--muted)",
+          fontWeight: 950,
+          flex: "0 0 auto",
+        }}
+        title="Open Amazon listing"
+      >
+        🛒
+      </a>
+    );
+  }
+
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      style={{
+        width: 72,
+        height: 72,
+        borderRadius: 14,
+        border: "1px solid rgba(255,255,255,0.14)",
+        background: "rgba(255,255,255,0.06)",
+        overflow: "hidden",
+        display: "block",
+        flex: "0 0 auto",
+      }}
+      title="Open Amazon listing"
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={src}
+        alt={`Amazon image ${asin}`}
+        style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+        onError={() => {
+          // try next candidate; if out, fallback
+          if (idx < candidates.length - 1) setIdx((v) => v + 1);
+          else setFailed(true);
+        }}
+      />
+    </a>
   );
 }
 
@@ -565,3 +712,4 @@ function ZxingScannerModal({
     </div>
   );
 }
+
