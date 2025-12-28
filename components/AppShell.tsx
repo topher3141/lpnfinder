@@ -64,60 +64,6 @@ function amazonImageCandidates(asin: string) {
   ];
 }
 
-/**
- * Heuristic: guess size from an item title/description.
- * Goal: "good enough" for fast processing, not perfect.
- */
-function extractSizeGuess(title: string): string {
-  const t = String(title || "").toLowerCase();
-  if (!t) return "—";
-
-  // Normalize separators to spaces
-  const s = t.replace(/[_\-()/,.;:]+/g, " ").replace(/\s+/g, " ").trim();
-
-  // 1) Explicit "size ..." patterns (only letter sizes, not numbers)
-  // Examples: "Size: Large", "size xl", "sz medium", "SIZE - 2XL"
-  const m1 = s.match(/\b(?:size|sz)\s*[:\-]?\s*(xxs|xs|small|medium|m|large|l|xl|xxl|xxxl|2xl|3xl|4xl|5xl)\b/i);
-  if (m1?.[1]) return normalizeSizeToken(m1[1]);
-
-  // 2) Standalone tokens (word sizes + letter sizes)
-  // Only accept if they appear as separate words/tokens.
-  const m2 = s.match(/\b(xxS|xxs|xs|small|medium|m|large|l|xl|xxl|xxxl|2xl|3xl|4xl|5xl)\b/i);
-  if (m2?.[1]) return normalizeSizeToken(m2[1]);
-
-  // 3) Common combined patterns like "x-large", "xx-large"
-  // Convert "x large" -> XL, "xx large" -> XXL
-  if (/\bxx\s+large\b/i.test(s)) return "XXL";
-  if (/\bx\s+large\b/i.test(s)) return "XL";
-
-  // If we don't see a clear size token, return dash (unknown)
-  return "—";
-}
-
-function normalizeSizeToken(raw: string): string {
-  const r = String(raw || "").toLowerCase().replace(/\s+/g, "");
-
-  // Word sizes
-  if (r === "small") return "S";
-  if (r === "medium") return "M";
-  if (r === "large") return "L";
-
-  // Letter sizes / extended
-  if (r === "xxs") return "XXS";
-  if (r === "xs") return "XS";
-  if (r === "s") return "S";
-  if (r === "m") return "M";
-  if (r === "l") return "L";
-  if (r === "xl") return "XL";
-  if (r === "xxl") return "XXL";
-  if (r === "xxxl") return "XXXL";
-  if (r === "2xl") return "2XL";
-  if (r === "3xl") return "3XL";
-  if (r === "4xl") return "4XL";
-  if (r === "5xl") return "5XL";
-
-  return "—";
-}
 
 
 export default function AppShell() {
@@ -392,28 +338,7 @@ export default function AppShell() {
                   <div style={{ fontSize: 24, fontWeight: 950, color: "var(--good)", lineHeight: 1.1 }}>{targetSellValue}</div>
                 </div>
 
-                {/* ✅ Size guess box */}
-                {sizeGuess ? (
-                  <div
-                    style={{
-                      marginTop: 10,
-                      display: "inline-block",
-                      padding: "10px 12px",
-                      borderRadius: 14,
-                      border: "1px solid rgba(251,191,36,0.35)",
-                      background: "rgba(251,191,36,0.10)",
-                      marginLeft: 10,
-                    }}
-                    title="Best guess from item description. Verify physical size—returns can be wrong."
-                  >
-                    <div className="priceLabel">
-                      Size (best guess) <span aria-hidden="true">⚠️</span>
-                    </div>
-                    <div style={{ fontSize: 22, fontWeight: 950, color: "rgba(255,255,255,0.92)", lineHeight: 1.1 }}>
-                      {sizeGuess}
-                    </div>
-                  </div>
-                ) : null}
+            
 
                 <div className="small" style={{ marginTop: 8 }}>
                   Last LPN: <strong style={{ color: "var(--text)" }}>{lastLpn || record.LPN || "—"}</strong>
