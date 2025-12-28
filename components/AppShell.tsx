@@ -233,7 +233,6 @@ export default function AppShell() {
     return String(record["Item Description"] || record["Description"] || "Item");
   }, [record]);
 
-  const sizeGuess = useMemo(() => extractSizeGuess(itemTitle), [itemTitle]);
 
   const asin = useMemo(() => (record ? normalizeAsin(record.ASIN) : ""), [record]);
   const amazonUrl = useMemo(() => (asin ? amazonDpUrl(asin) : ""), [asin]);
