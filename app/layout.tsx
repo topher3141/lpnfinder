@@ -1,5 +1,7 @@
 import "./globals.css";
 
+import SwRegister from "@/components/SwRegister";
+
 export const metadata = {
   title: "LPN Finder",
   description: "Scan or type an LPN to retrieve item details.",
@@ -11,7 +13,10 @@ export const metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+<body>
+  <SwRegister />
+  {children}
+</body>
     </html>
   );
 }
