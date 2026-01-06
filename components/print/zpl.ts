@@ -6,8 +6,13 @@ type LabelArgs = {
   sell: number;
 };
 
+// ASCII-only money formatter (no locale surprises)
 function money(n: number) {
-  return n.toLocaleString(undefined, { style: "currency", currency: "USD" });
+  const x = Number.isFinite(n) ? n : 0;
+  const s = x.toFixed(2); // "1234.50"
+  const [whole, frac] = s.split(".");
+  const withCommas = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return `$${withCommas}.${frac}`;
 }
 
 /**
@@ -15,8 +20,8 @@ function money(n: number) {
  * Approx dots: 406w x 254h
  *
  * Layout:
- * - Title: up to 3 lines (no overlap)
- * - Bottom: Retail + Sell side-by-side, same size (easy to read)
+ * - Title: up to 3 lines
+ * - Retail + Sell on same row/level, same size
  */
 export function buildZplLabelTight({ name, retail, sell }: LabelArgs) {
   const W = 406;
@@ -25,30 +30,22 @@ export function buildZplLabelTight({ name, retail, sell }: LabelArgs) {
   const left = 16;
   const right = 16;
 
-  // Two columns in bottom area
   const colGap = 14;
   const colW = Math.floor((W - left - right - colGap) / 2);
   const sellX = left + colW + colGap;
 
-  // Clean any chars that can break ZPL
+  // Remove characters that can break ZPL
   const safeName = String(name ?? "")
     .replace(/[\^~]/g, "")
+    .replace(/[^\x20-\x7E]/g, " ") // force ASCII printable only
     .trim();
 
-  // Title block area height:
-  // 3 lines of ~22-24 dot font + spacing => ~80-90 dots
-  // We'll allocate up to y ~ 104 for title, then divider, then price row.
   const titleY = 10;
-  const titleFontH = 22;
-  const titleFontW = 22;
+  const dividerY = 110;
 
-  const dividerY = 108;
+  const labelY = dividerY + 10;
+  const priceY = dividerY + 34;
 
-  // Bottom pricing starts after divider
-  const labelY = dividerY + 10;   // label line
-  const priceY = dividerY + 34;   // price line
-
-  // Price font: match your "sell good size"
   const priceFontH = 46;
   const priceFontW = 46;
 
@@ -59,11 +56,9 @@ export function buildZplLabelTight({ name, retail, sell }: LabelArgs) {
     "^XA",
     `^PW${W}`,
     `^LL${H}`,
-    "^CI28",
 
     // ---- Title (3 lines max) ----
-    // ^FB width,maxLines,lineSpacing,alignment,hang
-    `^FO${left},${titleY}^A0N,${titleFontH},${titleFontW}^FB${W - left - right},3,3,L,0^FD${safeName}^FS`,
+    `^FO${left},${titleY}^A0N,22,22^FB${W - left - right},3,3,L,0^FD${safeName}^FS`,
 
     // Divider
     `^FO${left},${dividerY}^GB${W - left - right},2,2^FS`,
