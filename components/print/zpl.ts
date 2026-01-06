@@ -1,49 +1,53 @@
-export function toMoney(n: number) {
-  return n.toLocaleString(undefined, { style: "currency", currency: "USD" });
-}
+// components/print/zpl.ts
 
-function sanitize(text: string) {
-  return String(text ?? "")
-    .replace(/[\u0000-\u001F\u007F]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-/**
- * QLn220 @ 203 dpi
- * 2.0" wide = 406 dots
- * 1.25" tall = 254 dots
- */
-export function buildZplLabelTight({
-  name,
-  retail,
-  sell,
-}: {
+type LabelArgs = {
   name: string;
   retail: number;
   sell: number;
-}) {
-  const title = sanitize(name).toUpperCase();
-  const line2 = `${toMoney(retail)}  ->  ${toMoney(sell)}`;
+};
 
-  return `^XA
-^CI27
-^PW406
-^LL254
-^LH0,0
-^MMT
-^PR3
-^MD15
-^PON
+function money(n: number) {
+  return n.toLocaleString(undefined, { style: "currency", currency: "USD" });
+}
 
-^FO12,18
-^A0N,34,30
-^FB382,2,0,L,0
-^FD${title}^FS
+/**
+ * Zebra QLn220 — 2.00" x 1.25" label at 203dpi
+ * Approx dots: 406w x 254h
+ *
+ * Layout:
+ * - Title: max 2 lines (no overlap)
+ * - Retail + Sell: larger & easy to read
+ */
+export function buildZplLabelTight({ name, retail, sell }: LabelArgs) {
+  const W = 406;
+  const left = 18;
 
-^FO12,112
-^A0N,30,26
-^FD${line2}^FS
+  // Remove characters that can break ZPL
+  const safeName = String(name ?? "")
+    .replace(/[\^~]/g, "")
+    .trim();
 
-^XZ`;
+  return [
+    "^XA",
+    `^PW${W}`,
+    "^LL254",
+    "^CI28",
+
+    // ----- TITLE (2 lines max) -----
+    // y=12, font 24x24, field block width ~370, maxLines=2, lineSpacing=4
+    `^FO${left},12^A0N,24,24^FB${W - left * 2},2,4,L,0^FD${safeName}^FS`,
+
+    // Divider
+    "^FO18,78^GB370,2,2^FS",
+
+    // ----- RETAIL (bigger) -----
+    "^FO18,88^A0N,26,26^FDRETAIL^FS",
+    `^FO18,116^A0N,56,56^FD${money(retail)}^FS`,
+
+    // ----- SELL (still highlighted but smaller than retail) -----
+    "^FO18,176^A0N,22,22^FDSELL^FS",
+    `^FO18,200^A0N,46,46^FD${money(sell)}^FS`,
+
+    "^XZ",
+  ].join("\n");
 }
