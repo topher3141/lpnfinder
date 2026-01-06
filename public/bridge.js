@@ -1,12 +1,24 @@
 (function () {
   try {
-    // Capacitor injects window.Capacitor in native builds
-    if (!window.Capacitor || !window.Capacitor.Plugins) return;
+    // Helpful debug so we know the file loaded at all
+    console.log("[bridge] loaded", {
+      hasCapacitor: !!window.Capacitor,
+      hasPlugins: !!window.Capacitor?.Plugins,
+      keys: Object.keys(window.Capacitor?.Plugins || {})
+    });
 
-    const plugin = window.Capacitor.Plugins.ZebraBridge;
-    if (!plugin) return;
+    const cap = window.Capacitor;
+    if (!cap) return;
 
-    // Expose a simple global your app already expects
+    // Capacitor 8: usually cap.Plugins, but keep fallback
+    const plugins = cap.Plugins || (cap).plugins || {};
+    const plugin = plugins.ZebraBridge;
+
+    if (!plugin) {
+      console.log("[bridge] ZebraBridge plugin missing. Available:", Object.keys(plugins || {}));
+      return;
+    }
+
     window.ZebraBridge = {
       listPaired: () => plugin.listPaired(),
       printZpl: ({ address, zpl }) => plugin.printZpl({ address, zpl })
