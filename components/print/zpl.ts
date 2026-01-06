@@ -6,10 +6,10 @@ type LabelArgs = {
   sell: number;
 };
 
-// ASCII-only money formatter (no locale surprises)
+// ASCII-only money formatter (safe for Zebra)
 function money(n: number) {
   const x = Number.isFinite(n) ? n : 0;
-  const s = x.toFixed(2); // "1234.50"
+  const s = x.toFixed(2);
   const [whole, frac] = s.split(".");
   const withCommas = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
   return `$${withCommas}.${frac}`;
@@ -17,11 +17,7 @@ function money(n: number) {
 
 /**
  * Zebra QLn220 — 2.00" x 1.25" label @ 203dpi
- * Approx dots: 406w x 254h
- *
- * Layout:
- * - Title: up to 3 lines
- * - Retail + Sell on same row/level, same size
+ * ~406w x 254h dots
  */
 export function buildZplLabelTight({ name, retail, sell }: LabelArgs) {
   const W = 406;
@@ -34,14 +30,15 @@ export function buildZplLabelTight({ name, retail, sell }: LabelArgs) {
   const colW = Math.floor((W - left - right - colGap) / 2);
   const sellX = left + colW + colGap;
 
-  // Remove characters that can break ZPL
+  // Sanitize text for ZPL
   const safeName = String(name ?? "")
     .replace(/[\^~]/g, "")
-    .replace(/[^\x20-\x7E]/g, " ") // force ASCII printable only
+    .replace(/[^\x20-\x7E]/g, " ")
     .trim();
 
-  const titleY = 10;
-  const dividerY = 110;
+  // ⬇️ ADD TOP MARGIN HERE
+  const titleY = 22;        // was 10 — this prevents top clipping
+  const dividerY = 122;     // pushed down to match title shift
 
   const labelY = dividerY + 10;
   const priceY = dividerY + 34;
@@ -57,17 +54,17 @@ export function buildZplLabelTight({ name, retail, sell }: LabelArgs) {
     `^PW${W}`,
     `^LL${H}`,
 
-    // ---- Title (3 lines max) ----
+    // ---- Title (up to 3 lines) ----
     `^FO${left},${titleY}^A0N,22,22^FB${W - left - right},3,3,L,0^FD${safeName}^FS`,
 
     // Divider
     `^FO${left},${dividerY}^GB${W - left - right},2,2^FS`,
 
-    // ---- Retail (left column) ----
+    // ---- Retail (left) ----
     `^FO${left},${labelY}^A0N,22,22^FDRETAIL^FS`,
     `^FO${left},${priceY}^A0N,${priceFontH},${priceFontW}^FD${retailStr}^FS`,
 
-    // ---- Sell (right column) ----
+    // ---- Sell (right) ----
     `^FO${sellX},${labelY}^A0N,22,22^FDSELL^FS`,
     `^FO${sellX},${priceY}^A0N,${priceFontH},${priceFontW}^FD${sellStr}^FS`,
 
