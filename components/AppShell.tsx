@@ -86,6 +86,20 @@ function setSavedPrinterAddress(address: string) {
   } catch {}
 }
 
+function getSavedPrintMode(): boolean {
+  try {
+    return localStorage.getItem("zebra_print_mode") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function setSavedPrintMode(v: boolean) {
+  try {
+    localStorage.setItem("zebra_print_mode", v ? "1" : "0");
+  } catch {}
+}
+
 export default function AppShell() {
   const [meta, setMeta] = useState<Meta | null>(null);
 
@@ -97,6 +111,9 @@ export default function AppShell() {
   const [scanMode, setScanMode] = useState(true);
   const [autoClear, setAutoClear] = useState(true);
   const [autoSearch, setAutoSearch] = useState(true);
+
+  // NEW: Print Mode (auto-print after lookup) — OFF by default
+  const [printMode, setPrintMode] = useState(false);
 
   const [scannerOpen, setScannerOpen] = useState(false);
 
@@ -111,12 +128,18 @@ export default function AppShell() {
   const [pairedDevices, setPairedDevices] = useState<ZebraDevice[]>([]);
   const [printerAddress, setPrinterAddress] = useState<string>("");
 
+  // Prevent double auto-prints for same LPN
+  const lastAutoPrintedRef = useRef<string>("");
+
   useEffect(() => {
     inputRef.current?.focus();
 
     // detect native bridge + restore saved printer
     setIsNative(Boolean(window?.ZebraBridge?.printZpl && window?.ZebraBridge?.listPaired));
     setPrinterAddress(getSavedPrinterAddress());
+
+    // restore print mode (OFF by default if never set)
+    setPrintMode(getSavedPrintMode());
 
     (async () => {
       try {
@@ -125,6 +148,10 @@ export default function AppShell() {
       } catch {}
     })();
   }, []);
+
+  useEffect(() => {
+    setSavedPrintMode(printMode);
+  }, [printMode]);
 
   function refocusSoon() {
     setTimeout(() => {
@@ -252,6 +279,8 @@ export default function AppShell() {
     }
 
     const sell = Math.round(retail * 0.5 * 100) / 100;
+
+    // Updated ZPL generator (2-line title + bigger prices)
     const zpl = buildZplLabelTight({ name: itemTitle, retail, sell });
 
     setStatus("Printing…");
@@ -264,6 +293,26 @@ export default function AppShell() {
       if (scanMode) refocusSoon();
     }
   }
+
+  // NEW: Auto-print when Print Mode is ON and a record is found
+  useEffect(() => {
+    if (!printMode) return;
+    if (!isNative) return;
+    if (!record) return;
+    if (!found) return;
+
+    const currentLpn = normalizeLpn(String(lastLpn || record?.LPN || ""));
+    if (!currentLpn) return;
+
+    if (lastAutoPrintedRef.current === currentLpn) return;
+    lastAutoPrintedRef.current = currentLpn;
+
+    // fire and forget
+    (async () => {
+      await printLabelSeamless();
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [printMode, isNative, record, found, lastLpn]);
 
   function Controls({ className }: { className?: string }) {
     return (
@@ -294,6 +343,14 @@ export default function AppShell() {
             <label style={{ display: "inline-flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
               <input type="checkbox" checked={autoClear} onChange={(e) => setAutoClear(e.target.checked)} disabled={!scanMode} />
               Auto-clear
+            </label>
+          </span>
+
+          {/* NEW: Print Mode toggle (OFF by default) */}
+          <span className="badge">
+            <label style={{ display: "inline-flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
+              <input type="checkbox" checked={printMode} onChange={(e) => setPrintMode(e.target.checked)} disabled={!isNative} />
+              Print Mode
             </label>
           </span>
         </div>
@@ -340,10 +397,16 @@ export default function AppShell() {
             {meta?.manifestCount ? `${meta.manifestCount} manifests • ${meta.uniqueLpns ?? "—"} LPNs` : "Ready to scan"}
           </div>
           {isNative && (
-            <div style={{ marginTop: 10 }}>
+            <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center" }}>
               <button className="button" onClick={openPrinterModal} style={{ width: "auto" }}>
                 Printer
               </button>
+              <span className="badge">
+                <label style={{ display: "inline-flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
+                  <input type="checkbox" checked={printMode} onChange={(e) => setPrintMode(e.target.checked)} />
+                  Print Mode
+                </label>
+              </span>
             </div>
           )}
         </div>
@@ -399,6 +462,7 @@ export default function AppShell() {
               setFound(null);
               setStatus("Ready. Scan or type an LPN.");
               lastTriggeredRef.current = "";
+              lastAutoPrintedRef.current = "";
               if (scanMode) refocusSoon();
             }}
           >
