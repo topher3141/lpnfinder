@@ -11,42 +11,70 @@ function money(n: number) {
 }
 
 /**
- * Zebra QLn220 — 2.00" x 1.25" label at 203dpi
+ * Zebra QLn220 — 2.00" x 1.25" label @ 203dpi
  * Approx dots: 406w x 254h
  *
  * Layout:
- * - Title: max 2 lines (no overlap)
- * - Retail + Sell: larger & easy to read
+ * - Title: up to 3 lines (no overlap)
+ * - Bottom: Retail + Sell side-by-side, same size (easy to read)
  */
 export function buildZplLabelTight({ name, retail, sell }: LabelArgs) {
   const W = 406;
-  const left = 18;
+  const H = 254;
 
-  // Remove characters that can break ZPL
+  const left = 16;
+  const right = 16;
+
+  // Two columns in bottom area
+  const colGap = 14;
+  const colW = Math.floor((W - left - right - colGap) / 2);
+  const sellX = left + colW + colGap;
+
+  // Clean any chars that can break ZPL
   const safeName = String(name ?? "")
     .replace(/[\^~]/g, "")
     .trim();
 
+  // Title block area height:
+  // 3 lines of ~22-24 dot font + spacing => ~80-90 dots
+  // We'll allocate up to y ~ 104 for title, then divider, then price row.
+  const titleY = 10;
+  const titleFontH = 22;
+  const titleFontW = 22;
+
+  const dividerY = 108;
+
+  // Bottom pricing starts after divider
+  const labelY = dividerY + 10;   // label line
+  const priceY = dividerY + 34;   // price line
+
+  // Price font: match your "sell good size"
+  const priceFontH = 46;
+  const priceFontW = 46;
+
+  const retailStr = money(retail);
+  const sellStr = money(sell);
+
   return [
     "^XA",
     `^PW${W}`,
-    "^LL254",
+    `^LL${H}`,
     "^CI28",
 
-    // ----- TITLE (2 lines max) -----
-    // y=12, font 24x24, field block width ~370, maxLines=2, lineSpacing=4
-    `^FO${left},12^A0N,24,24^FB${W - left * 2},2,4,L,0^FD${safeName}^FS`,
+    // ---- Title (3 lines max) ----
+    // ^FB width,maxLines,lineSpacing,alignment,hang
+    `^FO${left},${titleY}^A0N,${titleFontH},${titleFontW}^FB${W - left - right},3,3,L,0^FD${safeName}^FS`,
 
     // Divider
-    "^FO18,78^GB370,2,2^FS",
+    `^FO${left},${dividerY}^GB${W - left - right},2,2^FS`,
 
-    // ----- RETAIL (bigger) -----
-    "^FO18,88^A0N,26,26^FDRETAIL^FS",
-    `^FO18,116^A0N,56,56^FD${money(retail)}^FS`,
+    // ---- Retail (left column) ----
+    `^FO${left},${labelY}^A0N,22,22^FDRETAIL^FS`,
+    `^FO${left},${priceY}^A0N,${priceFontH},${priceFontW}^FD${retailStr}^FS`,
 
-    // ----- SELL (still highlighted but smaller than retail) -----
-    "^FO18,176^A0N,22,22^FDSELL^FS",
-    `^FO18,200^A0N,46,46^FD${money(sell)}^FS`,
+    // ---- Sell (right column) ----
+    `^FO${sellX},${labelY}^A0N,22,22^FDSELL^FS`,
+    `^FO${sellX},${priceY}^A0N,${priceFontH},${priceFontW}^FD${sellStr}^FS`,
 
     "^XZ",
   ].join("\n");
