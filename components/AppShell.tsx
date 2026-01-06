@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { buildZplLabelTight } from "@/components/print/zpl";
 
 type Meta = {
   updatedAt?: string;
@@ -10,6 +11,17 @@ type Meta = {
   shardsList?: string[];
   uniqueLpns?: number;
 };
+
+type ZebraDevice = { name: string; address: string };
+
+declare global {
+  interface Window {
+    ZebraBridge?: {
+      listPaired: () => Promise<{ devices: ZebraDevice[] }>;
+      printZpl: (args: { address: string; zpl: string }) => Promise<void>;
+    };
+  }
+}
 
 function normalizeLpn(input: string) {
   return (input || "").trim().replace(/\s+/g, "").toUpperCase();
@@ -49,10 +61,6 @@ function amazonDpUrl(asin: string) {
   return `https://www.amazon.com/dp/${asin}`;
 }
 
-/**
- * Best-effort Amazon image URLs.
- * Not guaranteed (Amazon changes these / blocks some), but often works.
- */
 function amazonImageCandidates(asin: string) {
   return [
     `https://images-na.ssl-images-amazon.com/images/P/${asin}.01._SX480_.jpg`,
@@ -64,7 +72,19 @@ function amazonImageCandidates(asin: string) {
   ];
 }
 
+function getSavedPrinterAddress(): string {
+  try {
+    return localStorage.getItem("zebra_printer_address") || "";
+  } catch {
+    return "";
+  }
+}
 
+function setSavedPrinterAddress(address: string) {
+  try {
+    localStorage.setItem("zebra_printer_address", address);
+  } catch {}
+}
 
 export default function AppShell() {
   const [meta, setMeta] = useState<Meta | null>(null);
@@ -81,12 +101,23 @@ export default function AppShell() {
   const [scannerOpen, setScannerOpen] = useState(false);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const lastTriggeredRef = useRef<string>("");
 
   const [lastLpn, setLastLpn] = useState<string>("");
-  const lastTriggeredRef = useRef<string>("");
+
+  // Native printing state
+  const [isNative, setIsNative] = useState(false);
+  const [printerModalOpen, setPrinterModalOpen] = useState(false);
+  const [pairedDevices, setPairedDevices] = useState<ZebraDevice[]>([]);
+  const [printerAddress, setPrinterAddress] = useState<string>("");
 
   useEffect(() => {
     inputRef.current?.focus();
+
+    // detect native bridge + restore saved printer
+    setIsNative(Boolean(window?.ZebraBridge?.printZpl && window?.ZebraBridge?.listPaired));
+    setPrinterAddress(getSavedPrinterAddress());
+
     (async () => {
       try {
         const res = await fetch("/index/meta.json", { cache: "no-store" });
@@ -148,6 +179,7 @@ export default function AppShell() {
     }
   }
 
+  // auto-search when a full LPN is present
   useEffect(() => {
     if (!scanMode || !autoSearch) return;
 
@@ -179,9 +211,59 @@ export default function AppShell() {
     return String(record["Item Description"] || record["Description"] || "Item");
   }, [record]);
 
-
   const asin = useMemo(() => (record ? normalizeAsin(record.ASIN) : ""), [record]);
   const amazonUrl = useMemo(() => (asin ? amazonDpUrl(asin) : ""), [asin]);
+
+  async function openPrinterModal() {
+    if (!window.ZebraBridge?.listPaired) {
+      setStatus("Printer setup is available only in the Android app build.");
+      return;
+    }
+    setStatus("Loading paired printers…");
+    try {
+      const res = await window.ZebraBridge.listPaired();
+      setPairedDevices(res?.devices || []);
+      setPrinterModalOpen(true);
+      setStatus("Select your Zebra printer.");
+    } catch (e: any) {
+      setStatus(`Failed to list paired devices: ${e?.message || e}`);
+    }
+  }
+
+  async function printLabelSeamless() {
+    if (!record) return;
+
+    if (!isNative || !window.ZebraBridge?.printZpl) {
+      setStatus("Seamless print is only available in the Android app build.");
+      return;
+    }
+
+    const addr = printerAddress || getSavedPrinterAddress();
+    if (!addr) {
+      setStatus("No printer selected. Choose a printer first.");
+      await openPrinterModal();
+      return;
+    }
+
+    const retail = retailNumber;
+    if (retail == null || !Number.isFinite(retail) || retail <= 0) {
+      setStatus("Cannot print: missing retail.");
+      return;
+    }
+
+    const sell = Math.round(retail * 0.5 * 100) / 100;
+    const zpl = buildZplLabelTight({ name: itemTitle, retail, sell });
+
+    setStatus("Printing…");
+    try {
+      await window.ZebraBridge.printZpl({ address: addr, zpl });
+      setStatus("Printed ✅");
+    } catch (e: any) {
+      setStatus(`Print failed: ${e?.message || e}`);
+    } finally {
+      if (scanMode) refocusSoon();
+    }
+  }
 
   function Controls({ className }: { className?: string }) {
     return (
@@ -231,7 +313,12 @@ export default function AppShell() {
           </p>
         </div>
 
-        <div className="row" style={{ justifyContent: "flex-end" }}>
+        <div className="row" style={{ justifyContent: "flex-end", alignItems: "center" }}>
+          {isNative && (
+            <button className="button" onClick={openPrinterModal} style={{ width: "auto" }}>
+              Printer
+            </button>
+          )}
           <span className="badge">
             Manifests: <strong style={{ color: "var(--text)" }}>{meta?.manifestCount ?? "—"}</strong>
           </span>
@@ -252,6 +339,13 @@ export default function AppShell() {
           <div className="small" style={{ marginTop: 6 }}>
             {meta?.manifestCount ? `${meta.manifestCount} manifests • ${meta.uniqueLpns ?? "—"} LPNs` : "Ready to scan"}
           </div>
+          {isNative && (
+            <div style={{ marginTop: 10 }}>
+              <button className="button" onClick={openPrinterModal} style={{ width: "auto" }}>
+                Printer
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -261,7 +355,7 @@ export default function AppShell() {
           <hr className="sep" />
         </div>
 
-        {/* Input */}
+        {/* Input row */}
         <div className="row" style={{ alignItems: "flex-start" }}>
           <div style={{ flex: 1, minWidth: 260 }}>
             <input
@@ -323,7 +417,7 @@ export default function AppShell() {
                 <div className="priceLabel">Retail</div>
                 <div className="price">{retailValue}</div>
 
-                {/* Target sell */}
+                {/* Target sell (highlighted but less dominant) */}
                 <div
                   style={{
                     marginTop: 10,
@@ -338,11 +432,24 @@ export default function AppShell() {
                   <div style={{ fontSize: 24, fontWeight: 950, color: "var(--good)", lineHeight: 1.1 }}>{targetSellValue}</div>
                 </div>
 
-            
-
                 <div className="small" style={{ marginTop: 8 }}>
                   Last LPN: <strong style={{ color: "var(--text)" }}>{lastLpn || record.LPN || "—"}</strong>
                 </div>
+
+                {/* Seamless Print button (native only) */}
+                {isNative && (
+                  <div style={{ marginTop: 10 }}>
+                    <button className="button" onClick={printLabelSeamless} style={{ width: "auto" }}>
+                      Print Label
+                    </button>
+                    <div className="small" style={{ marginTop: 6 }}>
+                      Printer:{" "}
+                      <strong style={{ color: "var(--text)" }}>
+                        {printerAddress ? printerAddress : "Not selected"}
+                      </strong>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <span className="badge desktopOnly">
@@ -352,7 +459,7 @@ export default function AppShell() {
 
             <div style={{ marginTop: 10, fontSize: 18, fontWeight: 950 }}>{itemTitle}</div>
 
-            {/* Amazon link + image */}
+            {/* Amazon link + image (best-effort) */}
             {asin ? (
               <div
                 style={{
@@ -403,6 +510,7 @@ export default function AppShell() {
               <KV label="Pallet ID" value={record["Pallet ID"]} />
               <KV label="Lot ID" value={record["Lot ID"]} />
 
+              {/* Extra fields only on desktop */}
               <div className="desktopOnly">
                 <div className="grid">
                   <KV label="ASIN" value={record.ASIN} />
@@ -425,14 +533,11 @@ export default function AppShell() {
           </div>
         )}
 
+        {/* Mobile controls at the bottom */}
         <div className="mobileOnly" style={{ marginTop: 14 }}>
           <hr className="sep" />
           <Controls />
         </div>
-      </div>
-
-      <div style={{ marginTop: 18 }} className="small desktopOnly">
-        Want to add more manifests? Drop them in <code>/manifests</code>, commit, and Vercel will rebuild the index on deploy.
       </div>
 
       {scannerOpen && (
@@ -444,6 +549,20 @@ export default function AppShell() {
             setQuery(v);
             setScannerOpen(false);
             lookup(v);
+          }}
+        />
+      )}
+
+      {printerModalOpen && (
+        <PrinterModal
+          devices={pairedDevices}
+          selectedAddress={printerAddress}
+          onClose={() => setPrinterModalOpen(false)}
+          onSelect={(addr) => {
+            setPrinterAddress(addr);
+            setSavedPrinterAddress(addr);
+            setPrinterModalOpen(false);
+            setStatus("Printer saved.");
           }}
         />
       )}
@@ -527,6 +646,71 @@ function AmazonImage({ asin, href }: { asin: string; href: string }) {
         }}
       />
     </a>
+  );
+}
+
+function PrinterModal({
+  devices,
+  selectedAddress,
+  onClose,
+  onSelect,
+}: {
+  devices: ZebraDevice[];
+  selectedAddress: string;
+  onClose: () => void;
+  onSelect: (address: string) => void;
+}) {
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.65)",
+        display: "grid",
+        placeItems: "center",
+        padding: 16,
+        zIndex: 60,
+      }}
+      onClick={onClose}
+    >
+      <div className="card" style={{ width: "min(720px, 100%)" }} onClick={(e) => e.stopPropagation()}>
+        <div className="row" style={{ justifyContent: "space-between" }}>
+          <div style={{ fontWeight: 950, fontSize: 16 }}>Select Zebra printer</div>
+          <button className="button" onClick={onClose} style={{ width: "auto" }}>
+            Close
+          </button>
+        </div>
+
+        <hr className="sep" />
+
+        {devices.length === 0 ? (
+          <div className="small">No paired Bluetooth devices found. Pair the QLn220 in Android Bluetooth settings first.</div>
+        ) : (
+          <div style={{ display: "grid", gap: 10 }}>
+            {devices.map((d) => {
+              const active = d.address === selectedAddress;
+              return (
+                <button
+                  key={d.address}
+                  className="button"
+                  onClick={() => onSelect(d.address)}
+                  style={{
+                    width: "100%",
+                    textAlign: "left",
+                    border: active ? "1px solid rgba(99,102,241,0.7)" : undefined,
+                  }}
+                >
+                  <div style={{ fontWeight: 950 }}>{d.name || "Unnamed device"}</div>
+                  <div className="small">{d.address}</div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -665,4 +849,3 @@ function ZxingScannerModal({
     </div>
   );
 }
-
