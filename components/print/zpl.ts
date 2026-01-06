@@ -15,6 +15,21 @@ function money(n: number) {
   return `$${withCommas}.${frac}`;
 }
 
+// Basic title limiter: keep within approx 3 lines worth of text.
+// This is an approximation, but works great for keeping labels clean.
+function limitTitleToThreeLines(input: string, lineChars = 30, lines = 3) {
+  const maxChars = lineChars * lines;
+
+  // normalize whitespace
+  let s = (input || "").replace(/\s+/g, " ").trim();
+
+  if (s.length <= maxChars) return s;
+
+  // Cut and add ellipsis (ASCII-only)
+  s = s.slice(0, maxChars - 1).trimEnd();
+  return s + "…";
+}
+
 /**
  * Zebra QLn220 — 2.00" x 1.25" label @ 203dpi
  * ~406w x 254h dots
@@ -30,15 +45,18 @@ export function buildZplLabelTight({ name, retail, sell }: LabelArgs) {
   const colW = Math.floor((W - left - right - colGap) / 2);
   const sellX = left + colW + colGap;
 
-  // Sanitize text for ZPL
-  const safeName = String(name ?? "")
+  // Sanitize text for ZPL (ASCII printable only)
+  let safeName = String(name ?? "")
     .replace(/[\^~]/g, "")
     .replace(/[^\x20-\x7E]/g, " ")
     .trim();
 
-  // ⬇️ ADD TOP MARGIN HERE
-  const titleY = 22;        // was 10 — this prevents top clipping
-  const dividerY = 122;     // pushed down to match title shift
+  // ✅ Truncate so we never exceed what 3 lines can reasonably display
+  // If you want “tighter” truncation, drop lineChars from 30 -> 28
+  safeName = limitTitleToThreeLines(safeName, 30, 3);
+
+  const titleY = 22;
+  const dividerY = 122;
 
   const labelY = dividerY + 10;
   const priceY = dividerY + 34;
@@ -71,3 +89,4 @@ export function buildZplLabelTight({ name, retail, sell }: LabelArgs) {
     "^XZ",
   ].join("\n");
 }
+
