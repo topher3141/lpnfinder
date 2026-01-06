@@ -1,24 +1,26 @@
+// app/layout.tsx
+import type { Metadata } from "next";
+import Script from "next/script";
 import "./globals.css";
 
-import SwRegister from "@/components/SwRegister";
-
-export const metadata = {
+export const metadata: Metadata = {
   title: "LPN Finder",
-  description: "Scan or type an LPN to retrieve item details.",
-  manifest: "/manifest.webmanifest",
-  themeColor: "#0b1220",
+  description: "Scan or type an LPN to retrieve item details and print Zebra labels.",
 };
 
-
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
   return (
     <html lang="en">
-<body>
- <script src="/bridge.js" />
-
-  <SwRegister />
-  {children}
-</body>
+      <head>
+        {/* Load bridge.js early so native Capacitor plugin gets exposed as window.ZebraBridge */}
+        <Script src="/bridge.js" strategy="beforeInteractive" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+      </head>
+      <body>{children}</body>
     </html>
   );
 }
