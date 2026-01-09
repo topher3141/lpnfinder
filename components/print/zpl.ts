@@ -3,7 +3,7 @@
 type LabelArgs = {
   name: string;
   retail: number;
-  sell: number;
+  sell: number; // (we keep the param name for compatibility, but it represents "Our Price")
 };
 
 // ASCII-only money formatter (safe for Zebra)
@@ -16,7 +16,6 @@ function money(n: number) {
 }
 
 // Basic title limiter: keep within approx 3 lines worth of text.
-// This is an approximation, but works great for keeping labels clean.
 function limitTitleToThreeLines(input: string, lineChars = 30, lines = 3) {
   const maxChars = lineChars * lines;
 
@@ -43,7 +42,8 @@ export function buildZplLabelTight({ name, retail, sell }: LabelArgs) {
 
   const colGap = 14;
   const colW = Math.floor((W - left - right - colGap) / 2);
-  const sellX = left + colW + colGap;
+  const ourX = left; // left column
+  const retailX = left + colW + colGap; // right column
 
   // Sanitize text for ZPL (ASCII printable only)
   let safeName = String(name ?? "")
@@ -51,21 +51,24 @@ export function buildZplLabelTight({ name, retail, sell }: LabelArgs) {
     .replace(/[^\x20-\x7E]/g, " ")
     .trim();
 
-  // ✅ Truncate so we never exceed what 3 lines can reasonably display
-  // If you want “tighter” truncation, drop lineChars from 30 -> 28
+  // Enforce 3-line limit
   safeName = limitTitleToThreeLines(safeName, 30, 3);
 
-  const titleY = 22;
-  const dividerY = 122;
+  // Give the title more top margin so it doesn't get clipped
+  const titleY = 32;
+
+  // Move divider slightly down to keep room for 3 lines comfortably
+  const dividerY = 132;
 
   const labelY = dividerY + 10;
-  const priceY = dividerY + 34;
+  const priceY = dividerY + 36;
 
-  const priceFontH = 46;
-  const priceFontW = 46;
+  // Bigger prices for easier reading
+  const priceFontH = 54;
+  const priceFontW = 54;
 
   const retailStr = money(retail);
-  const sellStr = money(sell);
+  const ourStr = money(sell); // "sell" value is actually Our Price
 
   return [
     "^XA",
@@ -78,15 +81,14 @@ export function buildZplLabelTight({ name, retail, sell }: LabelArgs) {
     // Divider
     `^FO${left},${dividerY}^GB${W - left - right},2,2^FS`,
 
-    // ---- Retail (left) ----
-    `^FO${left},${labelY}^A0N,22,22^FDRETAIL^FS`,
-    `^FO${left},${priceY}^A0N,${priceFontH},${priceFontW}^FD${retailStr}^FS`,
+    // ---- OUR PRICE (left) ----
+    `^FO${ourX},${labelY}^A0N,22,22^FDOUR PRICE^FS`,
+    `^FO${ourX},${priceY}^A0N,${priceFontH},${priceFontW}^FD${ourStr}^FS`,
 
-    // ---- Sell (right) ----
-    `^FO${sellX},${labelY}^A0N,22,22^FDSELL^FS`,
-    `^FO${sellX},${priceY}^A0N,${priceFontH},${priceFontW}^FD${sellStr}^FS`,
+    // ---- RETAIL (right) ----
+    `^FO${retailX},${labelY}^A0N,22,22^FDRETAIL^FS`,
+    `^FO${retailX},${priceY}^A0N,${priceFontH},${priceFontW}^FD${retailStr}^FS`,
 
     "^XZ",
   ].join("\n");
 }
-
