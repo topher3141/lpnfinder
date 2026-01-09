@@ -1,94 +1,82 @@
-// components/print/zpl.ts
-
-type LabelArgs = {
+type BuildLabelArgs = {
   name: string;
   retail: number;
-  sell: number; // (we keep the param name for compatibility, but it represents "Our Price")
+  ourPrice: number; // rounded whole-dollar already in AppShell
 };
 
-// ASCII-only money formatter (safe for Zebra)
-function money(n: number) {
-  const x = Number.isFinite(n) ? n : 0;
-  const s = x.toFixed(2);
-  const [whole, frac] = s.split(".");
-  const withCommas = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-  return `$${withCommas}.${frac}`;
+/**
+ * Utility: split title into maxLines, with maxCharsPerLine,
+ * and HARD truncate so we never print more text than fits.
+ */
+function splitTitleHard(text: string, maxCharsPerLine: number, maxLines: number): string[] {
+  const clean = String(text ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!clean) return [""];
+
+  const lines: string[] = [];
+  let i = 0;
+
+  // Hard-cut by character count (most predictable for ZPL, avoids overflow)
+  while (i < clean.length && lines.length < maxLines) {
+    lines.push(clean.slice(i, i + maxCharsPerLine));
+    i += maxCharsPerLine;
+  }
+
+  return lines;
 }
 
-// Basic title limiter: keep within approx 3 lines worth of text.
-function limitTitleToThreeLines(input: string, lineChars = 30, lines = 3) {
-  const maxChars = lineChars * lines;
-
-  // normalize whitespace
-  let s = (input || "").replace(/\s+/g, " ").trim();
-
-  if (s.length <= maxChars) return s;
-
-  // Cut and add ellipsis (ASCII-only)
-  s = s.slice(0, maxChars - 1).trimEnd();
-  return s + "…";
+// Escape ZPL control-ish characters (basic safety)
+function zplSafe(s: string) {
+  return String(s ?? "").replace(/[\^~]/g, " ");
 }
 
 /**
- * Zebra QLn220 — 2.00" x 1.25" label @ 203dpi
- * ~406w x 254h dots
+ * QLn220 2" label (203 dpi) friendly layout.
+ * If your label size differs, tell me printer DPI + label WxH and I’ll tune coordinates.
  */
-export function buildZplLabelTight({ name, retail, sell }: LabelArgs) {
-  const W = 406;
-  const H = 254;
+export function buildZplLabelTight({ name, retail, ourPrice }: BuildLabelArgs) {
+  const titleLines = splitTitleHard(name, 22, 3).map(zplSafe);
 
-  const left = 16;
-  const right = 16;
+  // Coordinates tuned to avoid top clipping and give 3 lines
+  // You can adjust X/Y if your label stock differs.
+  const x = 18;
 
-  const colGap = 14;
-  const colW = Math.floor((W - left - right - colGap) / 2);
-  const ourX = left; // left column
-  const retailX = left + colW + colGap; // right column
+  // Title block
+  const titleY = 20; // top margin to prevent clipping
+  const titleLineHeight = 34;
 
-  // Sanitize text for ZPL (ASCII printable only)
-  let safeName = String(name ?? "")
-    .replace(/[\^~]/g, "")
-    .replace(/[^\x20-\x7E]/g, " ")
-    .trim();
+  // Prices block below title
+  const pricesY = titleY + titleLineHeight * 3 + 10; // after 3 lines
 
-  // Enforce 3-line limit
-  safeName = limitTitleToThreeLines(safeName, 30, 3);
+  const retailStr = `$${Math.round(retail).toString()}`; // retail shown rounded too (visual consistency)
+  const ourStr = `$${Math.round(ourPrice).toString()}`;
 
-  // Give the title more top margin so it doesn't get clipped
-  const titleY = 32;
+  return `
+^XA
+^CI28
+^PW406
+^LH0,0
+^FS
 
-  // Move divider slightly down to keep room for 3 lines comfortably
-  const dividerY = 132;
+^CF0,28
+^FO${x},${titleY}^FD${titleLines[0] ?? ""}^FS
+^FO${x},${titleY + titleLineHeight}^FD${titleLines[1] ?? ""}^FS
+^FO${x},${titleY + titleLineHeight * 2}^FD${titleLines[2] ?? ""}^FS
 
-  const labelY = dividerY + 10;
-  const priceY = dividerY + 36;
+^FO${x},${pricesY}^GB370,2,2^FS
 
-  // Bigger prices for easier reading
-  const priceFontH = 54;
-  const priceFontW = 54;
+^CF0,28
+^FO${x},${pricesY + 10}^FDOUR PRICE^FS
+^CF0,70
+^FO${x},${pricesY + 40}^FD${ourStr}^FS
 
-  const retailStr = money(retail);
-  const ourStr = money(sell); // "sell" value is actually Our Price
+^CF0,26
+^FO${x},${pricesY + 125}^FDRETAIL^FS
+^CF0,34
+^FO${x},${pricesY + 155}^FD${retailStr}^FS
 
-  return [
-    "^XA",
-    `^PW${W}`,
-    `^LL${H}`,
-
-    // ---- Title (up to 3 lines) ----
-    `^FO${left},${titleY}^A0N,22,22^FB${W - left - right},3,3,L,0^FD${safeName}^FS`,
-
-    // Divider
-    `^FO${left},${dividerY}^GB${W - left - right},2,2^FS`,
-
-    // ---- OUR PRICE (left) ----
-    `^FO${ourX},${labelY}^A0N,22,22^FDOUR PRICE^FS`,
-    `^FO${ourX},${priceY}^A0N,${priceFontH},${priceFontW}^FD${ourStr}^FS`,
-
-    // ---- RETAIL (right) ----
-    `^FO${retailX},${labelY}^A0N,22,22^FDRETAIL^FS`,
-    `^FO${retailX},${priceY}^A0N,${priceFontH},${priceFontW}^FD${retailStr}^FS`,
-
-    "^XZ",
-  ].join("\n");
+^XZ
+`.trim();
 }
