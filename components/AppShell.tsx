@@ -20,10 +20,6 @@ declare global {
       listPaired: () => Promise<{ devices: ZebraDevice[] }>;
       printZpl: (args: { address: string; zpl: string }) => Promise<void>;
     };
-    ScanBridge?: {
-      configure: (opts: { action?: string; extraKey?: string }) => Promise<any>;
-      addListener: (eventName: "scan", cb: (ev: { value?: string }) => void) => { remove: () => void };
-    };
   }
 }
 
@@ -104,6 +100,11 @@ function setSavedPrintMode(v: boolean) {
   } catch {}
 }
 
+// Round to nearest whole dollar
+function roundToWholeDollar(n: number) {
+  return Math.round(n);
+}
+
 export default function AppShell() {
   const [meta, setMeta] = useState<Meta | null>(null);
 
@@ -122,6 +123,8 @@ export default function AppShell() {
   const [scannerOpen, setScannerOpen] = useState(false);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
+
+  // Used to prevent double firing (keyboard wedge + intent)
   const lastTriggeredRef = useRef<string>("");
 
   const [lastLpn, setLastLpn] = useState<string>("");
@@ -135,32 +138,11 @@ export default function AppShell() {
   // Prevent double auto-prints for same LPN
   const lastAutoPrintedRef = useRef<string>("");
 
-  // Keep ScanBridge listener remover
-  const scanBridgeRemover = useRef<{ remove: () => void } | null>(null);
-
   function refocusSoon() {
     setTimeout(() => {
       inputRef.current?.focus();
       inputRef.current?.select();
     }, 30);
-  }
-
-  // Unified entry for ANY scan source (keyboard wedge, intent broadcast, camera)
-  async function handleIncomingScan(raw: string) {
-    const v = normalizeLpn(raw);
-    if (!v) return;
-
-    // Avoid repeated triggers from some scanners that fire twice
-    if (lastTriggeredRef.current === v) return;
-    lastTriggeredRef.current = v;
-
-    setLastLpn(v);
-    setQuery(v);
-
-    // If scanMode+autoSearch, lookup will happen automatically in the effect below.
-    // But for intent broadcasts we want to fire immediately to feel instant.
-    // We'll do both safely by calling lookup() and letting the effect ignore duplicates.
-    await lookup(v);
   }
 
   useEffect(() => {
@@ -173,7 +155,6 @@ export default function AppShell() {
     // restore print mode (OFF by default if never set)
     setPrintMode(getSavedPrintMode());
 
-    // load meta
     (async () => {
       try {
         const res = await fetch("/index/meta.json", { cache: "no-store" });
@@ -181,44 +162,36 @@ export default function AppShell() {
       } catch {}
     })();
 
-    // ---- Intent Broadcast scanning (native app only) ----
+    // OPTIONAL: If you later add a ScanBridge Capacitor plugin for Intent Broadcast,
+    // you can pipe scans in here without relying on keyboard wedge settings.
+    // This try/catch makes it safe in web + non-native contexts.
     try {
-      // Clean up any old listener (hot reload)
-      if (scanBridgeRemover.current?.remove) {
-        scanBridgeRemover.current.remove();
-        scanBridgeRemover.current = null;
-      }
+      const cap = (window as any).Capacitor;
+      const scanBridge = cap?.Plugins?.ScanBridge;
 
-      // Preferred: Capacitor plugin listener
-      if (window.ScanBridge?.addListener) {
-        // Optional: If you later set PM85 to a single custom action/key once,
-        // you can lock it here:
-        // window.ScanBridge.configure({ action: "com.lcliquidations.lpnfinder.SCAN", extraKey: "data" });
+      // Expected: ScanBridge.addListener("scan", ({ data }) => ...)
+      if (scanBridge?.addListener) {
+        const removePromise = scanBridge.addListener("scan", (payload: any) => {
+          const raw = payload?.data ?? payload?.value ?? payload?.text ?? "";
+          const s = normalizeLpn(String(raw));
+          if (!s) return;
 
-        scanBridgeRemover.current = window.ScanBridge.addListener("scan", (ev) => {
-          const raw = String(ev?.value ?? "").trim();
-          if (!raw) return;
-          handleIncomingScan(raw);
+          setLastLpn(s);
+          setQuery(s);
+
+          // prevent double trigger from keyboard path
+          lastTriggeredRef.current = s;
+
+          lookup(s);
         });
+
+        return () => {
+          try {
+            // Capacitor listener returns an object with remove()
+            removePromise?.remove?.();
+          } catch {}
+        };
       }
-
-      // Fallback: window event dispatched by native code
-      const onPmScan = (e: any) => {
-        const raw = String(e?.detail?.value ?? "").trim();
-        if (!raw) return;
-        handleIncomingScan(raw);
-      };
-      window.addEventListener("pm-scan", onPmScan as any);
-
-      // cleanup for window event
-      return () => {
-        try {
-          window.removeEventListener("pm-scan", onPmScan as any);
-        } catch {}
-        try {
-          if (scanBridgeRemover.current?.remove) scanBridgeRemover.current.remove();
-        } catch {}
-      };
     } catch {
       // ignore
     }
@@ -297,12 +270,13 @@ export default function AppShell() {
 
   const retailValue = useMemo(() => (retailNumber == null ? "—" : formatMoney(retailNumber)), [retailNumber]);
 
-  const targetSellNumber = useMemo(() => {
+  // Our Price = 50% off retail, rounded to nearest whole dollar
+  const ourPriceNumber = useMemo(() => {
     if (retailNumber == null) return null;
-    return Math.round(retailNumber * 0.5 * 100) / 100;
+    return roundToWholeDollar(retailNumber * 0.5);
   }, [retailNumber]);
 
-  const targetSellValue = useMemo(() => (targetSellNumber == null ? "—" : formatMoney(targetSellNumber)), [targetSellNumber]);
+  const ourPriceValue = useMemo(() => (ourPriceNumber == null ? "—" : formatMoney(ourPriceNumber)), [ourPriceNumber]);
 
   const itemTitle = useMemo(() => {
     if (!record) return "";
@@ -349,8 +323,8 @@ export default function AppShell() {
       return;
     }
 
-    const sell = Math.round(retail * 0.5 * 100) / 100;
-    const zpl = buildZplLabelTight({ name: itemTitle, retail, sell });
+    const ourPrice = roundToWholeDollar(retail * 0.5);
+    const zpl = buildZplLabelTight({ name: itemTitle, retail, sell: ourPrice });
 
     setStatus("Printing…");
     try {
@@ -526,7 +500,6 @@ export default function AppShell() {
             onClick={() => {
               setQuery("");
               setFound(null);
-              setRecord(null);
               setStatus("Ready. Scan or type an LPN.");
               lastTriggeredRef.current = "";
               lastAutoPrintedRef.current = "";
@@ -544,28 +517,33 @@ export default function AppShell() {
         {record && (
           <div style={{ marginTop: 12 }} className="card">
             <div className="heroRetail" style={{ marginTop: 0 }}>
-              <div>
-                <div className="priceLabel">Retail</div>
-                <div className="price">{retailValue}</div>
+              <div style={{ minWidth: 0 }}>
+                {/* OUR PRICE (big, top) */}
+                <div className="priceLabel">Our Price</div>
+                <div className="price" style={{ fontSize: 44, lineHeight: 1.05, fontWeight: 950 }}>
+                  {ourPriceValue}
+                </div>
 
+                {/* Retail (box below, smaller) */}
                 <div
                   style={{
                     marginTop: 10,
                     display: "inline-block",
                     padding: "10px 12px",
                     borderRadius: 14,
-                    border: "1px solid rgba(52,211,153,0.35)",
-                    background: "rgba(52,211,153,0.10)",
+                    border: "1px solid rgba(255,255,255,0.14)",
+                    background: "rgba(255,255,255,0.06)",
                   }}
                 >
-                  <div className="priceLabel">Target Sell (50% off)</div>
-                  <div style={{ fontSize: 24, fontWeight: 950, color: "var(--good)", lineHeight: 1.1 }}>{targetSellValue}</div>
+                  <div className="priceLabel">Retail</div>
+                  <div style={{ fontSize: 24, fontWeight: 900, color: "var(--text)", lineHeight: 1.1 }}>{retailValue}</div>
                 </div>
 
-                <div className="small" style={{ marginTop: 8 }}>
+                <div className="small" style={{ marginTop: 10 }}>
                   Last LPN: <strong style={{ color: "var(--text)" }}>{lastLpn || record.LPN || "—"}</strong>
                 </div>
 
+                {/* Print (native only) */}
                 {isNative && (
                   <div style={{ marginTop: 10 }}>
                     <button className="button" onClick={printLabelSeamless} style={{ width: "auto" }}>
@@ -585,6 +563,7 @@ export default function AppShell() {
 
             <div style={{ marginTop: 10, fontSize: 18, fontWeight: 950 }}>{itemTitle}</div>
 
+            {/* Amazon link + image (best-effort) */}
             {asin ? (
               <div
                 style={{
@@ -635,6 +614,7 @@ export default function AppShell() {
               <KV label="Pallet ID" value={record["Pallet ID"]} />
               <KV label="Lot ID" value={record["Lot ID"]} />
 
+              {/* Extra fields only on desktop */}
               <div className="desktopOnly">
                 <div className="grid">
                   <KV label="ASIN" value={record.ASIN} />
@@ -655,6 +635,7 @@ export default function AppShell() {
           </div>
         )}
 
+        {/* Mobile controls at the bottom */}
         <div className="mobileOnly" style={{ marginTop: 14 }}>
           <hr className="sep" />
           <Controls />
@@ -669,6 +650,10 @@ export default function AppShell() {
             setLastLpn(v);
             setQuery(v);
             setScannerOpen(false);
+
+            // prevent double trigger
+            lastTriggeredRef.current = v;
+
             lookup(v);
           }}
         />
@@ -836,13 +821,7 @@ function PrinterModal({
 }
 
 /** ZXing camera scanner modal */
-function ZxingScannerModal({
-  onClose,
-  onScanned,
-}: {
-  onClose: () => void;
-  onScanned: (value: string) => void;
-}) {
+function ZxingScannerModal({ onClose, onScanned }: { onClose: () => void; onScanned: (value: string) => void }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const controlsRef = useRef<any>(null);
 
