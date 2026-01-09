@@ -20,6 +20,10 @@ declare global {
       listPaired: () => Promise<{ devices: ZebraDevice[] }>;
       printZpl: (args: { address: string; zpl: string }) => Promise<void>;
     };
+    ScanBridge?: {
+      configure: (opts: { action?: string; extraKey?: string }) => Promise<any>;
+      addListener: (eventName: "scan", cb: (ev: { value?: string }) => void) => { remove: () => void };
+    };
   }
 }
 
@@ -112,7 +116,7 @@ export default function AppShell() {
   const [autoClear, setAutoClear] = useState(true);
   const [autoSearch, setAutoSearch] = useState(true);
 
-  // NEW: Print Mode (auto-print after lookup) — OFF by default
+  // Print Mode (auto-print after lookup) — OFF by default
   const [printMode, setPrintMode] = useState(false);
 
   const [scannerOpen, setScannerOpen] = useState(false);
@@ -131,6 +135,34 @@ export default function AppShell() {
   // Prevent double auto-prints for same LPN
   const lastAutoPrintedRef = useRef<string>("");
 
+  // Keep ScanBridge listener remover
+  const scanBridgeRemover = useRef<{ remove: () => void } | null>(null);
+
+  function refocusSoon() {
+    setTimeout(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }, 30);
+  }
+
+  // Unified entry for ANY scan source (keyboard wedge, intent broadcast, camera)
+  async function handleIncomingScan(raw: string) {
+    const v = normalizeLpn(raw);
+    if (!v) return;
+
+    // Avoid repeated triggers from some scanners that fire twice
+    if (lastTriggeredRef.current === v) return;
+    lastTriggeredRef.current = v;
+
+    setLastLpn(v);
+    setQuery(v);
+
+    // If scanMode+autoSearch, lookup will happen automatically in the effect below.
+    // But for intent broadcasts we want to fire immediately to feel instant.
+    // We'll do both safely by calling lookup() and letting the effect ignore duplicates.
+    await lookup(v);
+  }
+
   useEffect(() => {
     inputRef.current?.focus();
 
@@ -141,24 +173,61 @@ export default function AppShell() {
     // restore print mode (OFF by default if never set)
     setPrintMode(getSavedPrintMode());
 
+    // load meta
     (async () => {
       try {
         const res = await fetch("/index/meta.json", { cache: "no-store" });
         if (res.ok) setMeta(await res.json());
       } catch {}
     })();
+
+    // ---- Intent Broadcast scanning (native app only) ----
+    try {
+      // Clean up any old listener (hot reload)
+      if (scanBridgeRemover.current?.remove) {
+        scanBridgeRemover.current.remove();
+        scanBridgeRemover.current = null;
+      }
+
+      // Preferred: Capacitor plugin listener
+      if (window.ScanBridge?.addListener) {
+        // Optional: If you later set PM85 to a single custom action/key once,
+        // you can lock it here:
+        // window.ScanBridge.configure({ action: "com.lcliquidations.lpnfinder.SCAN", extraKey: "data" });
+
+        scanBridgeRemover.current = window.ScanBridge.addListener("scan", (ev) => {
+          const raw = String(ev?.value ?? "").trim();
+          if (!raw) return;
+          handleIncomingScan(raw);
+        });
+      }
+
+      // Fallback: window event dispatched by native code
+      const onPmScan = (e: any) => {
+        const raw = String(e?.detail?.value ?? "").trim();
+        if (!raw) return;
+        handleIncomingScan(raw);
+      };
+      window.addEventListener("pm-scan", onPmScan as any);
+
+      // cleanup for window event
+      return () => {
+        try {
+          window.removeEventListener("pm-scan", onPmScan as any);
+        } catch {}
+        try {
+          if (scanBridgeRemover.current?.remove) scanBridgeRemover.current.remove();
+        } catch {}
+      };
+    } catch {
+      // ignore
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     setSavedPrintMode(printMode);
   }, [printMode]);
-
-  function refocusSoon() {
-    setTimeout(() => {
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    }, 30);
-  }
 
   async function lookup(lpnOverride?: string) {
     const lpn = normalizeLpn(lpnOverride ?? query);
@@ -200,18 +269,20 @@ export default function AppShell() {
     } finally {
       if (scanMode && autoClear) {
         setQuery("");
-        lastTriggeredRef.current = "";
+        // do NOT clear lastTriggeredRef here; it prevents double triggers
       }
       if (scanMode) refocusSoon();
     }
   }
 
-  // auto-search when a full LPN is present
+  // auto-search when a full LPN is present (keyboard wedge path)
   useEffect(() => {
     if (!scanMode || !autoSearch) return;
 
     const s = normalizeLpn(query);
     if (!looksLikeFullLpn(s)) return;
+
+    // Avoid double lookup if intent listener already fired
     if (lastTriggeredRef.current === s) return;
 
     lastTriggeredRef.current = s;
@@ -279,8 +350,6 @@ export default function AppShell() {
     }
 
     const sell = Math.round(retail * 0.5 * 100) / 100;
-
-    // Updated ZPL generator (2-line title + bigger prices)
     const zpl = buildZplLabelTight({ name: itemTitle, retail, sell });
 
     setStatus("Printing…");
@@ -294,7 +363,7 @@ export default function AppShell() {
     }
   }
 
-  // NEW: Auto-print when Print Mode is ON and a record is found
+  // Auto-print when Print Mode is ON and a record is found
   useEffect(() => {
     if (!printMode) return;
     if (!isNative) return;
@@ -307,7 +376,6 @@ export default function AppShell() {
     if (lastAutoPrintedRef.current === currentLpn) return;
     lastAutoPrintedRef.current = currentLpn;
 
-    // fire and forget
     (async () => {
       await printLabelSeamless();
     })();
@@ -346,7 +414,6 @@ export default function AppShell() {
             </label>
           </span>
 
-          {/* NEW: Print Mode toggle (OFF by default) */}
           <span className="badge">
             <label style={{ display: "inline-flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
               <input type="checkbox" checked={printMode} onChange={(e) => setPrintMode(e.target.checked)} disabled={!isNative} />
@@ -383,8 +450,7 @@ export default function AppShell() {
             Unique LPNs: <strong style={{ color: "var(--text)" }}>{meta?.uniqueLpns ?? "—"}</strong>
           </span>
           <span className="badge">
-            Updated:{" "}
-            <strong style={{ color: "var(--text)" }}>{meta?.updatedAt ? new Date(meta.updatedAt).toLocaleString() : "—"}</strong>
+            Updated: <strong style={{ color: "var(--text)" }}>{meta?.updatedAt ? new Date(meta.updatedAt).toLocaleString() : "—"}</strong>
           </span>
         </div>
       </div>
@@ -460,6 +526,7 @@ export default function AppShell() {
             onClick={() => {
               setQuery("");
               setFound(null);
+              setRecord(null);
               setStatus("Ready. Scan or type an LPN.");
               lastTriggeredRef.current = "";
               lastAutoPrintedRef.current = "";
@@ -481,7 +548,6 @@ export default function AppShell() {
                 <div className="priceLabel">Retail</div>
                 <div className="price">{retailValue}</div>
 
-                {/* Target sell (highlighted but less dominant) */}
                 <div
                   style={{
                     marginTop: 10,
@@ -500,17 +566,13 @@ export default function AppShell() {
                   Last LPN: <strong style={{ color: "var(--text)" }}>{lastLpn || record.LPN || "—"}</strong>
                 </div>
 
-                {/* Seamless Print button (native only) */}
                 {isNative && (
                   <div style={{ marginTop: 10 }}>
                     <button className="button" onClick={printLabelSeamless} style={{ width: "auto" }}>
                       Print Label
                     </button>
                     <div className="small" style={{ marginTop: 6 }}>
-                      Printer:{" "}
-                      <strong style={{ color: "var(--text)" }}>
-                        {printerAddress ? printerAddress : "Not selected"}
-                      </strong>
+                      Printer: <strong style={{ color: "var(--text)" }}>{printerAddress ? printerAddress : "Not selected"}</strong>
                     </div>
                   </div>
                 )}
@@ -523,7 +585,6 @@ export default function AppShell() {
 
             <div style={{ marginTop: 10, fontSize: 18, fontWeight: 950 }}>{itemTitle}</div>
 
-            {/* Amazon link + image (best-effort) */}
             {asin ? (
               <div
                 style={{
@@ -574,7 +635,6 @@ export default function AppShell() {
               <KV label="Pallet ID" value={record["Pallet ID"]} />
               <KV label="Lot ID" value={record["Lot ID"]} />
 
-              {/* Extra fields only on desktop */}
               <div className="desktopOnly">
                 <div className="grid">
                   <KV label="ASIN" value={record.ASIN} />
@@ -591,13 +651,10 @@ export default function AppShell() {
 
         {found === false && (
           <div style={{ marginTop: 12 }} className="card">
-            <div style={{ fontWeight: 950, fontSize: 16, color: "var(--bad)" }}>
-              No match {lastLpn ? `(${lastLpn})` : ""}
-            </div>
+            <div style={{ fontWeight: 950, fontSize: 16, color: "var(--bad)" }}>No match {lastLpn ? `(${lastLpn})` : ""}</div>
           </div>
         )}
 
-        {/* Mobile controls at the bottom */}
         <div className="mobileOnly" style={{ marginTop: 14 }}>
           <hr className="sep" />
           <Controls />
