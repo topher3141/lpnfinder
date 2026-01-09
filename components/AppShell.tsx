@@ -20,6 +20,11 @@ declare global {
       listPaired: () => Promise<{ devices: ZebraDevice[] }>;
       printZpl: (args: { address: string; zpl: string }) => Promise<void>;
     };
+    // Native scan bridge (intent broadcast -> JS)
+    ScanBridge?: {
+      configure: (opts: { action?: string; extraKey?: string }) => Promise<any>;
+      addListener: (eventName: "scan", cb: (ev: { value?: string }) => void) => { remove: () => void };
+    };
   }
 }
 
@@ -44,6 +49,11 @@ function formatMoney(value: any) {
   const n = toNumberMoney(value);
   if (n == null) return "—";
   return n.toLocaleString(undefined, { style: "currency", currency: "USD" });
+}
+
+// Round to nearest whole dollar (e.g., 7.49 -> 7, 7.50 -> 8)
+function roundToDollar(n: number) {
+  return Math.round(n);
 }
 
 // LPN + 10 characters
@@ -100,11 +110,6 @@ function setSavedPrintMode(v: boolean) {
   } catch {}
 }
 
-// Round to nearest whole dollar
-function roundToWholeDollar(n: number) {
-  return Math.round(n);
-}
-
 export default function AppShell() {
   const [meta, setMeta] = useState<Meta | null>(null);
 
@@ -117,14 +122,12 @@ export default function AppShell() {
   const [autoClear, setAutoClear] = useState(true);
   const [autoSearch, setAutoSearch] = useState(true);
 
-  // Print Mode (auto-print after lookup) — OFF by default
+  // Auto-print after successful lookup (native only)
   const [printMode, setPrintMode] = useState(false);
 
   const [scannerOpen, setScannerOpen] = useState(false);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
-
-  // Used to prevent double firing (keyboard wedge + intent)
   const lastTriggeredRef = useRef<string>("");
 
   const [lastLpn, setLastLpn] = useState<string>("");
@@ -138,12 +141,8 @@ export default function AppShell() {
   // Prevent double auto-prints for same LPN
   const lastAutoPrintedRef = useRef<string>("");
 
-  function refocusSoon() {
-    setTimeout(() => {
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    }, 30);
-  }
+  // ScanBridge subscription
+  const scanListenerRef = useRef<{ remove: () => void } | null>(null);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -161,46 +160,63 @@ export default function AppShell() {
         if (res.ok) setMeta(await res.json());
       } catch {}
     })();
-
-    // OPTIONAL: If you later add a ScanBridge Capacitor plugin for Intent Broadcast,
-    // you can pipe scans in here without relying on keyboard wedge settings.
-    // This try/catch makes it safe in web + non-native contexts.
-    try {
-      const cap = (window as any).Capacitor;
-      const scanBridge = cap?.Plugins?.ScanBridge;
-
-      // Expected: ScanBridge.addListener("scan", ({ data }) => ...)
-      if (scanBridge?.addListener) {
-        const removePromise = scanBridge.addListener("scan", (payload: any) => {
-          const raw = payload?.data ?? payload?.value ?? payload?.text ?? "";
-          const s = normalizeLpn(String(raw));
-          if (!s) return;
-
-          setLastLpn(s);
-          setQuery(s);
-
-          // prevent double trigger from keyboard path
-          lastTriggeredRef.current = s;
-
-          lookup(s);
-        });
-
-        return () => {
-          try {
-            // Capacitor listener returns an object with remove()
-            removePromise?.remove?.();
-          } catch {}
-        };
-      }
-    } catch {
-      // ignore
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     setSavedPrintMode(printMode);
   }, [printMode]);
+
+  // If ScanBridge exists, listen for intent-broadcast scans (PM85 default wedge behavior)
+  useEffect(() => {
+    // cleanup any existing listener
+    try {
+      scanListenerRef.current?.remove?.();
+    } catch {}
+    scanListenerRef.current = null;
+
+    if (!window.ScanBridge?.addListener) return;
+
+    // Optional: configure expected action/extraKey (your native plugin can ignore these if not used)
+    (async () => {
+      try {
+        await window.ScanBridge?.configure?.({
+          action: "com.lcliquidations.lpnfinder.SCAN",
+          extraKey: "data",
+        });
+      } catch {}
+    })();
+
+    const sub = window.ScanBridge.addListener("scan", (ev) => {
+      const raw = String(ev?.value ?? "");
+      const v = normalizeLpn(raw);
+      if (!v) return;
+
+      // Make this path “own” the trigger so keyboard auto-search doesn't double-fire
+      lastTriggeredRef.current = v;
+
+      setLastLpn(v);
+      setQuery(v);
+
+      // immediate lookup (works even if device isn't sending Enter key)
+      lookup(v);
+    });
+
+    scanListenerRef.current = sub;
+
+    return () => {
+      try {
+        sub?.remove?.();
+      } catch {}
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function refocusSoon() {
+    setTimeout(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }, 30);
+  }
 
   async function lookup(lpnOverride?: string) {
     const lpn = normalizeLpn(lpnOverride ?? query);
@@ -242,7 +258,9 @@ export default function AppShell() {
     } finally {
       if (scanMode && autoClear) {
         setQuery("");
-        // do NOT clear lastTriggeredRef here; it prevents double triggers
+        // do NOT clear lastTriggeredRef here if ScanBridge is driving scans
+        // but clearing is OK because we set it immediately when scan arrives
+        lastTriggeredRef.current = "";
       }
       if (scanMode) refocusSoon();
     }
@@ -270,10 +288,11 @@ export default function AppShell() {
 
   const retailValue = useMemo(() => (retailNumber == null ? "—" : formatMoney(retailNumber)), [retailNumber]);
 
-  // Our Price = 50% off retail, rounded to nearest whole dollar
+  // Our Price = rounded to nearest whole dollar
   const ourPriceNumber = useMemo(() => {
     if (retailNumber == null) return null;
-    return roundToWholeDollar(retailNumber * 0.5);
+    const raw = retailNumber * 0.5;
+    return roundToDollar(raw);
   }, [retailNumber]);
 
   const ourPriceValue = useMemo(() => (ourPriceNumber == null ? "—" : formatMoney(ourPriceNumber)), [ourPriceNumber]);
@@ -318,13 +337,19 @@ export default function AppShell() {
     }
 
     const retail = retailNumber;
+    const ourPrice = ourPriceNumber;
+
     if (retail == null || !Number.isFinite(retail) || retail <= 0) {
       setStatus("Cannot print: missing retail.");
       return;
     }
+    if (ourPrice == null || !Number.isFinite(ourPrice) || ourPrice <= 0) {
+      setStatus("Cannot print: missing our price.");
+      return;
+    }
 
-    const ourPrice = roundToWholeDollar(retail * 0.5);
-    const zpl = buildZplLabelTight({ name: itemTitle, retail, sell: ourPrice });
+    // Updated ZPL: 3-line title max, OUR PRICE big, RETAIL smaller
+    const zpl = buildZplLabelTight({ name: itemTitle, retail, ourPrice });
 
     setStatus("Printing…");
     try {
@@ -424,7 +449,8 @@ export default function AppShell() {
             Unique LPNs: <strong style={{ color: "var(--text)" }}>{meta?.uniqueLpns ?? "—"}</strong>
           </span>
           <span className="badge">
-            Updated: <strong style={{ color: "var(--text)" }}>{meta?.updatedAt ? new Date(meta.updatedAt).toLocaleString() : "—"}</strong>
+            Updated:{" "}
+            <strong style={{ color: "var(--text)" }}>{meta?.updatedAt ? new Date(meta.updatedAt).toLocaleString() : "—"}</strong>
           </span>
         </div>
       </div>
@@ -500,6 +526,7 @@ export default function AppShell() {
             onClick={() => {
               setQuery("");
               setFound(null);
+              setRecord(null);
               setStatus("Ready. Scan or type an LPN.");
               lastTriggeredRef.current = "";
               lastAutoPrintedRef.current = "";
@@ -517,14 +544,14 @@ export default function AppShell() {
         {record && (
           <div style={{ marginTop: 12 }} className="card">
             <div className="heroRetail" style={{ marginTop: 0 }}>
-              <div style={{ minWidth: 0 }}>
+              <div style={{ minWidth: 260 }}>
                 {/* OUR PRICE (big, top) */}
                 <div className="priceLabel">Our Price</div>
-                <div className="price" style={{ fontSize: 44, lineHeight: 1.05, fontWeight: 950 }}>
+                <div className="price" style={{ fontSize: 38, fontWeight: 950, lineHeight: 1.05 }}>
                   {ourPriceValue}
                 </div>
 
-                {/* Retail (box below, smaller) */}
+                {/* Retail (smaller in the box below) */}
                 <div
                   style={{
                     marginTop: 10,
@@ -532,18 +559,17 @@ export default function AppShell() {
                     padding: "10px 12px",
                     borderRadius: 14,
                     border: "1px solid rgba(255,255,255,0.14)",
-                    background: "rgba(255,255,255,0.06)",
+                    background: "rgba(255,255,255,0.05)",
                   }}
                 >
                   <div className="priceLabel">Retail</div>
-                  <div style={{ fontSize: 24, fontWeight: 900, color: "var(--text)", lineHeight: 1.1 }}>{retailValue}</div>
+                  <div style={{ fontSize: 22, fontWeight: 950, color: "var(--text)", lineHeight: 1.1 }}>{retailValue}</div>
                 </div>
 
-                <div className="small" style={{ marginTop: 10 }}>
+                <div className="small" style={{ marginTop: 8 }}>
                   Last LPN: <strong style={{ color: "var(--text)" }}>{lastLpn || record.LPN || "—"}</strong>
                 </div>
 
-                {/* Print (native only) */}
                 {isNative && (
                   <div style={{ marginTop: 10 }}>
                     <button className="button" onClick={printLabelSeamless} style={{ width: "auto" }}>
@@ -635,7 +661,6 @@ export default function AppShell() {
           </div>
         )}
 
-        {/* Mobile controls at the bottom */}
         <div className="mobileOnly" style={{ marginTop: 14 }}>
           <hr className="sep" />
           <Controls />
@@ -650,10 +675,6 @@ export default function AppShell() {
             setLastLpn(v);
             setQuery(v);
             setScannerOpen(false);
-
-            // prevent double trigger
-            lastTriggeredRef.current = v;
-
             lookup(v);
           }}
         />
@@ -821,7 +842,13 @@ function PrinterModal({
 }
 
 /** ZXing camera scanner modal */
-function ZxingScannerModal({ onClose, onScanned }: { onClose: () => void; onScanned: (value: string) => void }) {
+function ZxingScannerModal({
+  onClose,
+  onScanned,
+}: {
+  onClose: () => void;
+  onScanned: (value: string) => void;
+}) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const controlsRef = useRef<any>(null);
 
