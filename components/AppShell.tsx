@@ -20,7 +20,6 @@ declare global {
       listPaired: () => Promise<{ devices: ZebraDevice[] }>;
       printZpl: (args: { address: string; zpl: string }) => Promise<void>;
     };
-    // Native scan bridge (intent broadcast -> JS)
     ScanBridge?: {
       configure: (opts: { action?: string; extraKey?: string }) => Promise<any>;
       addListener: (eventName: "scan", cb: (ev: { value?: string }) => void) => { remove: () => void };
@@ -49,11 +48,6 @@ function formatMoney(value: any) {
   const n = toNumberMoney(value);
   if (n == null) return "—";
   return n.toLocaleString(undefined, { style: "currency", currency: "USD" });
-}
-
-// Round to nearest whole dollar (e.g., 7.49 -> 7, 7.50 -> 8)
-function roundToDollar(n: number) {
-  return Math.round(n);
 }
 
 // LPN + 10 characters
@@ -122,7 +116,7 @@ export default function AppShell() {
   const [autoClear, setAutoClear] = useState(true);
   const [autoSearch, setAutoSearch] = useState(true);
 
-  // Auto-print after successful lookup (native only)
+  // Print Mode (auto-print after lookup) — OFF by default
   const [printMode, setPrintMode] = useState(false);
 
   const [scannerOpen, setScannerOpen] = useState(false);
@@ -141,8 +135,33 @@ export default function AppShell() {
   // Prevent double auto-prints for same LPN
   const lastAutoPrintedRef = useRef<string>("");
 
-  // ScanBridge subscription
-  const scanListenerRef = useRef<{ remove: () => void } | null>(null);
+  // Keep ScanBridge listener remover
+  const scanBridgeRemover = useRef<{ remove: () => void } | null>(null);
+
+  function refocusSoon() {
+    setTimeout(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }, 30);
+  }
+
+  // Unified entry for ANY scan source (keyboard wedge, intent broadcast, camera)
+  async function handleIncomingScan(raw: string) {
+    const v = normalizeLpn(raw);
+    if (!v) return;
+
+    // Avoid repeated triggers from some scanners that fire twice
+    if (lastTriggeredRef.current === v) return;
+    lastTriggeredRef.current = v;
+
+    setLastLpn(v);
+    setQuery(v);
+
+    // If scanMode+autoSearch, lookup will happen automatically in the effect below.
+    // But for intent broadcasts we want to fire immediately to feel instant.
+    // We'll do both safely by calling lookup() and letting the effect ignore duplicates.
+    await lookup(v);
+  }
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -154,69 +173,61 @@ export default function AppShell() {
     // restore print mode (OFF by default if never set)
     setPrintMode(getSavedPrintMode());
 
+    // load meta
     (async () => {
       try {
         const res = await fetch("/index/meta.json", { cache: "no-store" });
         if (res.ok) setMeta(await res.json());
       } catch {}
     })();
+
+    // ---- Intent Broadcast scanning (native app only) ----
+    try {
+      // Clean up any old listener (hot reload)
+      if (scanBridgeRemover.current?.remove) {
+        scanBridgeRemover.current.remove();
+        scanBridgeRemover.current = null;
+      }
+
+      // Preferred: Capacitor plugin listener
+      if (window.ScanBridge?.addListener) {
+        // Optional: If you later set PM85 to a single custom action/key once,
+        // you can lock it here:
+        // window.ScanBridge.configure({ action: "com.lcliquidations.lpnfinder.SCAN", extraKey: "data" });
+
+        scanBridgeRemover.current = window.ScanBridge.addListener("scan", (ev) => {
+          const raw = String(ev?.value ?? "").trim();
+          if (!raw) return;
+          handleIncomingScan(raw);
+        });
+      }
+
+      // Fallback: window event dispatched by native code
+      const onPmScan = (e: any) => {
+        const raw = String(e?.detail?.value ?? "").trim();
+        if (!raw) return;
+        handleIncomingScan(raw);
+      };
+      window.addEventListener("pm-scan", onPmScan as any);
+
+      // cleanup for window event
+      return () => {
+        try {
+          window.removeEventListener("pm-scan", onPmScan as any);
+        } catch {}
+        try {
+          if (scanBridgeRemover.current?.remove) scanBridgeRemover.current.remove();
+        } catch {}
+      };
+    } catch {
+      // ignore
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     setSavedPrintMode(printMode);
   }, [printMode]);
-
-  // If ScanBridge exists, listen for intent-broadcast scans (PM85 default wedge behavior)
-  useEffect(() => {
-    // cleanup any existing listener
-    try {
-      scanListenerRef.current?.remove?.();
-    } catch {}
-    scanListenerRef.current = null;
-
-    if (!window.ScanBridge?.addListener) return;
-
-    // Optional: configure expected action/extraKey (your native plugin can ignore these if not used)
-    (async () => {
-      try {
-        await window.ScanBridge?.configure?.({
-          action: "com.lcliquidations.lpnfinder.SCAN",
-          extraKey: "data",
-        });
-      } catch {}
-    })();
-
-    const sub = window.ScanBridge.addListener("scan", (ev) => {
-      const raw = String(ev?.value ?? "");
-      const v = normalizeLpn(raw);
-      if (!v) return;
-
-      // Make this path “own” the trigger so keyboard auto-search doesn't double-fire
-      lastTriggeredRef.current = v;
-
-      setLastLpn(v);
-      setQuery(v);
-
-      // immediate lookup (works even if device isn't sending Enter key)
-      lookup(v);
-    });
-
-    scanListenerRef.current = sub;
-
-    return () => {
-      try {
-        sub?.remove?.();
-      } catch {}
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  function refocusSoon() {
-    setTimeout(() => {
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    }, 30);
-  }
 
   async function lookup(lpnOverride?: string) {
     const lpn = normalizeLpn(lpnOverride ?? query);
@@ -258,9 +269,7 @@ export default function AppShell() {
     } finally {
       if (scanMode && autoClear) {
         setQuery("");
-        // do NOT clear lastTriggeredRef here if ScanBridge is driving scans
-        // but clearing is OK because we set it immediately when scan arrives
-        lastTriggeredRef.current = "";
+        // do NOT clear lastTriggeredRef here; it prevents double triggers
       }
       if (scanMode) refocusSoon();
     }
@@ -288,14 +297,12 @@ export default function AppShell() {
 
   const retailValue = useMemo(() => (retailNumber == null ? "—" : formatMoney(retailNumber)), [retailNumber]);
 
-  // Our Price = rounded to nearest whole dollar
-  const ourPriceNumber = useMemo(() => {
+  const targetSellNumber = useMemo(() => {
     if (retailNumber == null) return null;
-    const raw = retailNumber * 0.5;
-    return roundToDollar(raw);
+    return Math.round(retailNumber * 0.5 * 100) / 100;
   }, [retailNumber]);
 
-  const ourPriceValue = useMemo(() => (ourPriceNumber == null ? "—" : formatMoney(ourPriceNumber)), [ourPriceNumber]);
+  const targetSellValue = useMemo(() => (targetSellNumber == null ? "—" : formatMoney(targetSellNumber)), [targetSellNumber]);
 
   const itemTitle = useMemo(() => {
     if (!record) return "";
@@ -337,19 +344,13 @@ export default function AppShell() {
     }
 
     const retail = retailNumber;
-    const ourPrice = ourPriceNumber;
-
     if (retail == null || !Number.isFinite(retail) || retail <= 0) {
       setStatus("Cannot print: missing retail.");
       return;
     }
-    if (ourPrice == null || !Number.isFinite(ourPrice) || ourPrice <= 0) {
-      setStatus("Cannot print: missing our price.");
-      return;
-    }
 
-    // Updated ZPL: 3-line title max, OUR PRICE big, RETAIL smaller
-    const zpl = buildZplLabelTight({ name: itemTitle, retail, ourPrice });
+    const sell = Math.round(retail * 0.5 * 100) / 100;
+    const zpl = buildZplLabelTight({ name: itemTitle, retail, sell });
 
     setStatus("Printing…");
     try {
@@ -449,8 +450,7 @@ export default function AppShell() {
             Unique LPNs: <strong style={{ color: "var(--text)" }}>{meta?.uniqueLpns ?? "—"}</strong>
           </span>
           <span className="badge">
-            Updated:{" "}
-            <strong style={{ color: "var(--text)" }}>{meta?.updatedAt ? new Date(meta.updatedAt).toLocaleString() : "—"}</strong>
+            Updated: <strong style={{ color: "var(--text)" }}>{meta?.updatedAt ? new Date(meta.updatedAt).toLocaleString() : "—"}</strong>
           </span>
         </div>
       </div>
@@ -544,26 +544,22 @@ export default function AppShell() {
         {record && (
           <div style={{ marginTop: 12 }} className="card">
             <div className="heroRetail" style={{ marginTop: 0 }}>
-              <div style={{ minWidth: 260 }}>
-                {/* OUR PRICE (big, top) */}
-                <div className="priceLabel">Our Price</div>
-                <div className="price" style={{ fontSize: 38, fontWeight: 950, lineHeight: 1.05 }}>
-                  {ourPriceValue}
-                </div>
+              <div>
+                <div className="priceLabel">Retail</div>
+                <div className="price">{retailValue}</div>
 
-                {/* Retail (smaller in the box below) */}
                 <div
                   style={{
                     marginTop: 10,
                     display: "inline-block",
                     padding: "10px 12px",
                     borderRadius: 14,
-                    border: "1px solid rgba(255,255,255,0.14)",
-                    background: "rgba(255,255,255,0.05)",
+                    border: "1px solid rgba(52,211,153,0.35)",
+                    background: "rgba(52,211,153,0.10)",
                   }}
                 >
-                  <div className="priceLabel">Retail</div>
-                  <div style={{ fontSize: 22, fontWeight: 950, color: "var(--text)", lineHeight: 1.1 }}>{retailValue}</div>
+                  <div className="priceLabel">Target Sell (50% off)</div>
+                  <div style={{ fontSize: 24, fontWeight: 950, color: "var(--good)", lineHeight: 1.1 }}>{targetSellValue}</div>
                 </div>
 
                 <div className="small" style={{ marginTop: 8 }}>
@@ -589,7 +585,6 @@ export default function AppShell() {
 
             <div style={{ marginTop: 10, fontSize: 18, fontWeight: 950 }}>{itemTitle}</div>
 
-            {/* Amazon link + image (best-effort) */}
             {asin ? (
               <div
                 style={{
@@ -640,7 +635,6 @@ export default function AppShell() {
               <KV label="Pallet ID" value={record["Pallet ID"]} />
               <KV label="Lot ID" value={record["Lot ID"]} />
 
-              {/* Extra fields only on desktop */}
               <div className="desktopOnly">
                 <div className="grid">
                   <KV label="ASIN" value={record.ASIN} />
